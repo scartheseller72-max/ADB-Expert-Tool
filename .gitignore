@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.exe
+*.log
+.vscode/
+.idea/
+*.sublime-*
+.DS_Store
+Thumbs.db
+*.bak
+*.tmp
