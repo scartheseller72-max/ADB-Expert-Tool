@@ -1,866 +1,794 @@
 """
-ADB Expert GUI v3.0 - Ultimate Professional Android Control Center
-Max Expert Level - Unanswered, Unbound, Raw Expert
+ADB Expert GUI v3.5 - Zero Freeze, Max UX, Professional Android Control Center
 """
-
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
-import os
-import sys
-import threading
-import time
-import json
+import os, sys, threading, time
 from datetime import datetime
 
 from adb_utils import ADBCore, ADBError, DeviceInfo, detect_adb_path
 
 
+# ─── Color Theme ───
+C = {
+    "bg0": "#010409", "bg1": "#0d1117", "bg2": "#161b22", "bg3": "#21262d",
+    "bg4": "#30363d", "fg": "#e6edf3", "fg2": "#8b949e",
+    "blue": "#58a6ff", "green": "#3fb950", "yellow": "#d29922",
+    "red": "#f85149", "purple": "#bc8cff", "cyan": "#39d353",
+    "orange": "#f0883e", "pink": "#ff7b72",
+}
+
+
 class ADBExpertGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("ADB EXPERT TOOL v3.0 - Ultimate Android Control Center")
+        self.root.title("ADB EXPERT v3.5")
         self.root.geometry("1500x950")
         self.root.minsize(1300, 850)
+        self.root.configure(bg=C["bg0"])
 
-        # ─── Theme ───
-        self.BG0 = "#010409"
-        self.BG1 = "#0d1117"
-        self.BG2 = "#161b22"
-        self.BG3 = "#21262d"
-        self.BG4 = "#30363d"
-        self.FG = "#e6edf3"
-        self.FG2 = "#8b949e"
-        self.BLUE = "#58a6ff"
-        self.GREEN = "#3fb950"
-        self.YELLOW = "#d29922"
-        self.RED = "#f85149"
-        self.PURPLE = "#bc8cff"
-        self.CYAN = "#39d353"
-        self.ORANGE = "#f0883e"
-
-        self.root.configure(bg=self.BG0)
-
-        # ─── ADB Core ───
         self.core = None
-        self.selected_device = None
-        self.devices: list = []
-        self.fastboot_devices: list = []
-        self.command_history = []
-        self.history_index = -1
+        self.selected_device: str = None
+        self.devices: list[DeviceInfo] = []
+        self.fb_devices: list[DeviceInfo] = []
+        self.cmd_history: list[str] = []
+        self.hist_idx = -1
+        self._enrich_thread = None
 
-        # ─── Init ADB ───
         try:
             self.core = ADBCore()
         except ADBError as e:
-            self._show_adb_error(str(e))
+            self._adb_error_dialog(e)
             return
 
-        self._setup_styles()
-        self._build_ui()
-        self._refresh_devices()
-        self.root.after(6000, self._auto_refresh)
+        self._styles()
+        self._build()
+        self._refresh()
 
-    def _show_adb_error(self, msg):
-        error_win = tk.Toplevel(self.root)
-        error_win.title("ADB Not Found")
-        error_win.geometry("600x300")
-        error_win.configure(bg=self.BG1)
+    # ─── ADB ERROR DIALOG ───
 
-        tk.Label(error_win, text="ADB NOT FOUND", font=("Segoe UI", 18, "bold"),
-                 bg=self.BG1, fg=self.RED).pack(pady=20)
-        tk.Label(error_win, text=msg, font=("Consolas", 10), bg=self.BG1, fg=self.FG,
-                 wraplength=550, justify=tk.LEFT).pack(padx=20, pady=10)
-        tk.Label(error_win, text="Download from: https://developer.android.com/studio/releases/platform-tools",
-                 font=("Consolas", 9), bg=self.BG1, fg=self.CYAN).pack(pady=5)
-        tk.Button(error_win, text="Browse for adb.exe", command=lambda: self._browse_adb(error_win),
-                  bg=self.BG3, fg=self.FG, font=("Segoe UI", 10), relief=tk.FLAT, padx=20, pady=8).pack(pady=15)
+    def _adb_error_dialog(self, e: ADBError):
+        dlg = tk.Toplevel(self.root)
+        dlg.title("ADB Not Found")
+        dlg.geometry("620x320")
+        dlg.configure(bg=C["bg2"])
+        dlg.transient(self.root)
+        dlg.grab_set()
 
-    def _browse_adb(self, win):
+        tk.Label(dlg, text="ADB NOT FOUND", font=("Segoe UI", 20, "bold"),
+                 bg=C["bg2"], fg=C["red"]).pack(pady=(25, 10))
+        tk.Label(dlg, text=str(e), font=("Consolas", 10), bg=C["bg2"], fg=C["fg"],
+                 wraplength=580, justify=tk.LEFT).pack(padx=20, pady=5)
+        tk.Label(dlg, text="Download: developer.android.com/tools/releases/platform-tools",
+                 font=("Consolas", 9), bg=C["bg2"], fg=C["cyan"], cursor="hand2").pack(pady=5)
+        tk.Button(dlg, text="Browse for adb.exe",
+                  command=lambda: self._browse_adb(dlg),
+                  bg=C["bg3"], fg=C["blue"], font=("Segoe UI", 11, "bold"),
+                  relief=tk.FLAT, padx=30, pady=10, cursor="hand2").pack(pady=15)
+
+    def _browse_adb(self, dlg):
         path = filedialog.askopenfilename(filetypes=[("ADB", "adb.exe"), ("All", "*.*")])
         if path and os.path.exists(path):
             try:
                 self.core = ADBCore(path)
-                win.destroy()
-                self._setup_styles()
-                self._build_ui()
-                self._refresh_devices()
-                self.root.after(6000, self._auto_refresh)
-            except Exception as e:
-                messagebox.showerror("Error", str(e))
+                dlg.destroy()
+                self._styles()
+                self._build()
+                self._refresh()
+            except Exception as ex:
+                messagebox.showerror("Error", str(ex))
 
-    def _setup_styles(self):
+    # ─── STYLES ───
+
+    def _styles(self):
         s = ttk.Style()
         s.theme_use("clam")
-        s.configure("TNotebook", background=self.BG0, borderwidth=0)
-        s.configure("TNotebook.Tab", background=self.BG2, foreground=self.FG,
-                     padding=[18, 10], font=("Segoe UI", 10, "bold"))
+        s.configure("TNotebook", background=C["bg0"], borderwidth=0)
+        s.configure("TNotebook.Tab", background=C["bg2"], foreground=C["fg"],
+                     padding=[22, 12], font=("Segoe UI", 10, "bold"))
         s.map("TNotebook.Tab",
-              background=[("selected", self.BG3), ("active", self.BG4)],
-              foreground=[("selected", self.BLUE), ("active", self.FG)])
-        s.configure("TFrame", background=self.BG0)
-        s.configure("TLabelframe", background=self.BG2, borderwidth=2, relief="solid",
-                     bordercolor=self.BG4)
-        s.configure("TLabelframe.Label", background=self.BG2, foreground=self.BLUE,
+              background=[("selected", C["bg3"]), ("active", C["bg4"])],
+              foreground=[("selected", C["blue"]), ("active", C["fg"])])
+        s.configure("TFrame", background=C["bg0"])
+        s.configure("TLabelframe", background=C["bg2"], borderwidth=2, relief="solid",
+                     bordercolor=C["bg4"])
+        s.configure("TLabelframe.Label", background=C["bg2"], foreground=C["blue"],
                      font=("Segoe UI", 11, "bold"))
-        s.configure("Treeview", background=self.BG2, foreground=self.FG,
-                     fieldbackground=self.BG2, borderwidth=0, rowheight=26,
+        s.configure("Treeview", background=C["bg2"], foreground=C["fg"],
+                     fieldbackground=C["bg2"], borderwidth=0, rowheight=27,
                      font=("Consolas", 9))
-        s.configure("Treeview.Heading", background=self.BG3, foreground=self.FG,
+        s.configure("Treeview.Heading", background=C["bg3"], foreground=C["fg"],
                      font=("Segoe UI", 9, "bold"))
-        s.map("Treeview", background=[("selected", self.BLUE)])
+        s.map("Treeview", background=[("selected", C["blue"])])
 
-    def _build_ui(self):
-        self._build_top_bar()
-        self.notebook = ttk.Notebook(self.root, padding=5)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
-        self._build_dashboard()
-        self._build_shell()
-        self._build_file_manager()
-        self._build_app_manager()
-        self._build_flash_tab()
-        self._build_unlock_tab()
-        self._build_diagnostics()
-        self._build_network_tab()
-        self._build_automation_tab()
-        self._build_advanced_tab()
-        self._build_status_bar()
+    # ─── BUILD UI ───
+
+    def _build(self):
+        self._top_bar()
+        self.nb = ttk.Notebook(self.root, padding=5)
+        self.nb.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+        self._tab_dashboard()
+        self._tab_shell()
+        self._tab_files()
+        self._tab_apps()
+        self._tab_flash()
+        self._tab_unlock()
+        self._tab_diag()
+        self._tab_network()
+        self._tab_auto()
+        self._tab_adv()
+        self._status_bar()
 
     # ─── TOP BAR ───
-    def _build_top_bar(self):
-        bar = tk.Frame(self.root, bg=self.BG2, height=65)
+
+    def _top_bar(self):
+        bar = tk.Frame(self.root, bg=C["bg2"], height=65)
         bar.pack(fill=tk.X)
         bar.pack_propagate(False)
 
-        tk.Label(bar, text="ADB EXPERT", bg=self.BG2, fg=self.BLUE,
+        tk.Label(bar, text="ADB EXPERT", bg=C["bg2"], fg=C["blue"],
                  font=("Segoe UI", 16, "bold")).pack(side=tk.LEFT, padx=15)
-        tk.Label(bar, text="v3.0", bg=self.BG2, fg=self.FG2,
-                 font=("Segoe UI", 10)).pack(side=tk.LEFT)
+        tk.Label(bar, text="v3.5", bg=C["bg2"], fg=C["fg2"],
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 20))
 
-        tk.Label(bar, text="Device:", bg=self.BG2, fg=self.FG2,
-                 font=("Segoe UI", 10)).pack(side=tk.LEFT, padx=(30, 5))
-        self.device_var = tk.StringVar(value="Scanning...")
-        self.device_combo = ttk.Combobox(bar, textvariable=self.device_var,
-                                         state="readonly", width=55, font=("Consolas", 10))
-        self.device_combo.pack(side=tk.LEFT, padx=5, pady=15)
-        self.device_combo.bind("<<ComboboxSelected>>", self._on_device_select)
+        tk.Label(bar, text="Device:", bg=C["bg2"], fg=C["fg2"],
+                 font=("Segoe UI", 10)).pack(side=tk.LEFT, padx=(10, 5))
+        self.dev_var = tk.StringVar(value="Scanning...")
+        self.dev_cb = ttk.Combobox(bar, textvariable=self.dev_var, state="readonly",
+                                    width=55, font=("Consolas", 10))
+        self.dev_cb.pack(side=tk.LEFT, padx=5, pady=15)
+        self.dev_cb.bind("<<ComboboxSelected>>", self._on_dev_select)
 
-        self._make_btn(bar, "Refresh", self._refresh_devices, self.BLUE).pack(side=tk.LEFT, padx=5)
-        self._make_btn(bar, "Connect WiFi", self._wifi_connect_dialog, self.GREEN).pack(side=tk.LEFT, padx=5)
+        self._btn(bar, "Refresh", self._refresh, C["blue"], 10).pack(side=tk.LEFT, padx=5)
 
-        self._make_btn(bar, "Reboot", lambda: self._reboot(""), self.YELLOW).pack(side=tk.RIGHT, padx=3)
-        self._make_btn(bar, "Bootloader", lambda: self._reboot("bootloader"), self.ORANGE).pack(side=tk.RIGHT, padx=3)
-        self._make_btn(bar, "Recovery", lambda: self._reboot("recovery"), self.ORANGE).pack(side=tk.RIGHT, padx=3)
-        self._make_btn(bar, "EDL", lambda: self._reboot_edl(), self.RED).pack(side=tk.RIGHT, padx=3)
+        # Status dot + label
+        self._status_dot = tk.Label(bar, text="●", bg=C["bg2"], fg=C["red"],
+                                     font=("Segoe UI", 20))
+        self._status_dot.pack(side=tk.RIGHT, padx=(5, 2))
+        self._status_label = tk.Label(bar, text="No Device", bg=C["bg2"], fg=C["fg2"],
+                                       font=("Segoe UI", 9))
+        self._status_label.pack(side=tk.RIGHT, padx=(1, 10))
 
-        # Device status indicator
-        self.device_status_dot = tk.Label(bar, text="●", bg=self.BG2, fg=self.RED,
-                                          font=("Segoe UI", 18))
-        self.device_status_dot.pack(side=tk.RIGHT, padx=10)
+        for text, cmd, color in [("EDL", self._reboot_edl, C["red"]),
+                                   ("Recovery", lambda: self._reboot("recovery"), C["orange"]),
+                                   ("Bootloader", lambda: self._reboot("bootloader"), C["orange"]),
+                                   ("Reboot", lambda: self._reboot(""), C["yellow"])]:
+            self._btn(bar, text, cmd, color).pack(side=tk.RIGHT, padx=3)
 
-    def _make_btn(self, parent, text, cmd, color):
-        btn = tk.Button(parent, text=text, command=cmd,
-                        bg=self.BG3, fg=color, activebackground=color,
-                        activeforeground="#fff", font=("Segoe UI", 9, "bold"),
-                        relief=tk.FLAT, padx=12, pady=6, cursor="hand2")
-        return btn
+    def _btn(self, parent, text, cmd, color, padx=12):
+        return tk.Button(parent, text=text, command=cmd,
+                         bg=C["bg3"], fg=color, activebackground=color,
+                         activeforeground="#fff", font=("Segoe UI", 9, "bold"),
+                         relief=tk.FLAT, padx=padx, pady=6, cursor="hand2")
 
-    def _build_status_bar(self):
-        self.status_bar = tk.Label(self.root, text=f"Ready | ADB: {self.core.adb_path}",
-                                   bg=self.BG2, fg=self.FG2, font=("Consolas", 9),
-                                   anchor=tk.W, padx=10)
-        self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
+    def _status_bar(self):
+        self._sbar = tk.Label(self.root, text=f"Ready | {self.core.adb_path}",
+                              bg=C["bg2"], fg=C["fg2"], font=("Consolas", 9),
+                              anchor=tk.W, padx=10)
+        self._sbar.pack(fill=tk.X, side=tk.BOTTOM)
 
     # ─── DASHBOARD ───
-    def _build_dashboard(self):
-        frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text=" Dashboard ")
 
-        # Left - Info
-        left = ttk.LabelFrame(frame, text="Device Information", padding=10)
+    def _tab_dashboard(self):
+        f = ttk.Frame(self.nb)
+        self.nb.add(f, text=" Dashboard ")
+
+        left = ttk.LabelFrame(f, text="Device Information", padding=10)
         left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=8)
+        self._info_txt = scrolledtext.ScrolledText(left, wrap=tk.WORD, font=("Consolas", 10),
+                                                     bg=C["bg2"], fg=C["fg"], insertbackground=C["fg"],
+                                                     relief=tk.FLAT, state=tk.DISABLED, padx=12, pady=12)
+        self._info_txt.pack(fill=tk.BOTH, expand=True)
 
-        self.info_text = scrolledtext.ScrolledText(left, wrap=tk.WORD, font=("Consolas", 10),
-                                                    bg=self.BG2, fg=self.FG, insertbackground=self.FG,
-                                                    relief=tk.FLAT, state=tk.DISABLED, padx=12, pady=12)
-        self.info_text.pack(fill=tk.BOTH, expand=True)
-
-        # Right - Stats + Actions
-        right = tk.Frame(frame, bg=self.BG0)
+        right = tk.Frame(f, bg=C["bg0"])
         right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=8, pady=8)
 
         stats = ttk.LabelFrame(right, text="Quick Stats", padding=10)
         stats.pack(fill=tk.X, pady=5)
-
-        self.stat_labels = {}
-        stat_items = [
-            ("Status", "●"), ("Model", ""), ("Brand", ""), ("Android", ""),
-            ("SDK", ""), ("Battery", ""), ("Root", ""), ("Bootloader", ""),
-            ("Chipset", ""), ("IMEI", ""), ("RAM", ""), ("Storage", ""),
-            ("SELinux", ""), ("Resolution", ""), ("Density", ""), ("Uptime", ""),
-            ("Kernel", ""), ("Magisk", ""), ("TWRP", ""), ("WiFi", ""),
-        ]
-        for i, (key, _) in enumerate(stat_items):
-            row, col = divmod(i, 2)
+        self._stats = {}
+        keys = ["Status", "Model", "Brand", "Android", "SDK", "Battery",
+                "Root", "Bootloader", "Chipset", "IMEI", "RAM", "Storage",
+                "SELinux", "Res", "DPI", "Uptime", "Kernel", "Magisk",
+                "TWRP", "WiFi", "IP", "Temp"]
+        for i, key in enumerate(keys):
+            r, c = divmod(i, 3)
             tk.Label(stats, text=f"{key}:", font=("Segoe UI", 9, "bold"),
-                     bg=self.BG2, fg=self.CYAN, anchor=tk.W).grid(row=row, column=col*2, sticky=tk.W, pady=2, padx=5)
-            lbl = tk.Label(stats, text="N/A", font=("Consolas", 9),
-                           bg=self.BG2, fg=self.FG, anchor=tk.W, width=20)
-            lbl.grid(row=row, column=col*2+1, sticky=tk.W, padx=5, pady=2)
-            self.stat_labels[key] = lbl
+                     bg=C["bg2"], fg=C["cyan"], anchor=tk.W).grid(row=r, column=c*2, sticky=tk.W, pady=1, padx=(5, 2))
+            lbl = tk.Label(stats, text="...", font=("Consolas", 9),
+                           bg=C["bg2"], fg=C["fg"], anchor=tk.W)
+            lbl.grid(row=r, column=c*2+1, sticky=tk.W, padx=2, pady=1)
+            self._stats[key] = lbl
 
-        actions = ttk.LabelFrame(right, text="Quick Actions", padding=10)
-        actions.pack(fill=tk.X, pady=10)
-
+        act = ttk.LabelFrame(right, text="Quick Actions", padding=10)
+        act.pack(fill=tk.X, pady=8)
         btns = [
-            ("Screenshot", self._screenshot, self.BLUE),
-            ("Screen Record", self._screen_record, self.BLUE),
-            ("Dump UI XML", self._dump_ui_action, self.PURPLE),
-            ("Clear Cache", self._clear_cache, self.YELLOW),
-            ("Emergency Info", self._emergency_info, self.RED),
-            ("Wake Screen", self._wake_screen, self.GREEN),
-            ("Open App...", self._open_app_dialog, self.CYAN),
-            ("Reboot System", lambda: self._reboot(""), self.ORANGE),
+            ("Screenshot", self._scr, C["blue"]),
+            ("Record", self._rec, C["blue"]),
+            ("Dump UI", self._dump_ui_act, C["purple"]),
+            ("Clear Cache", self._clrcache, C["yellow"]),
+            ("Emergency", self._emergency, C["red"]),
+            ("Wake", self._wake, C["green"]),
+            ("Open App...", self._open_app, C["cyan"]),
+            ("Reboot", lambda: self._reboot(""), C["orange"]),
+            ("Connect WiFi...", self._wifi_dlg, C["green"]),
+            ("Disconnect All", self._disconnect_all, C["red"]),
+            ("Screenshot", lambda: self._scr(), C["blue"]),
+            ("Record 10s", lambda: self._rec(), C["blue"]),
         ]
-        for i, (text, cmd, color) in enumerate(btns):
-            tk.Button(actions, text=text, command=cmd, bg=self.BG3, fg=color,
+        for i, (text, cmd, color) in enumerate(btns[:8]):
+            tk.Button(act, text=text, command=cmd, bg=C["bg3"], fg=color,
                       activebackground=color, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=12, pady=8,
-                      cursor="hand2", width=14).grid(row=i//4, column=i%4, padx=4, pady=4)
+                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT,
+                      padx=10, pady=7, cursor="hand2", width=12).grid(
+                row=i//4, column=i%4, padx=3, pady=3)
 
     # ─── SHELL ───
-    def _build_shell(self):
-        frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text=" Shell ")
 
-        self.shell_out = scrolledtext.ScrolledText(frame, wrap=tk.WORD, font=("Consolas", 10),
-                                                     bg=self.BG2, fg=self.GREEN, insertbackground=self.GREEN,
-                                                     relief=tk.FLAT, state=tk.DISABLED, padx=12, pady=12)
-        self.shell_out.pack(fill=tk.BOTH, expand=True, padx=8, pady=(8, 0))
+    def _tab_shell(self):
+        f = ttk.Frame(self.nb)
+        self.nb.add(f, text=" Shell ")
 
-        inp = tk.Frame(frame, bg=self.BG0, height=50)
+        self._sh_out = scrolledtext.ScrolledText(f, wrap=tk.WORD, font=("Consolas", 10),
+                                                   bg=C["bg2"], fg=C["green"], insertbackground=C["green"],
+                                                   relief=tk.FLAT, state=tk.DISABLED, padx=12, pady=12)
+        self._sh_out.pack(fill=tk.BOTH, expand=True, padx=8, pady=(8, 0))
+
+        inp = tk.Frame(f, bg=C["bg0"], height=55)
         inp.pack(fill=tk.X, padx=8, pady=8)
         inp.pack_propagate(False)
 
-        tk.Label(inp, text="$", bg=self.BG0, fg=self.GREEN,
+        tk.Label(inp, text="$", bg=C["bg0"], fg=C["green"],
                  font=("Consolas", 14, "bold")).pack(side=tk.LEFT, padx=8)
 
-        self.shell_input = tk.Entry(inp, font=("Consolas", 11), bg=self.BG2, fg=self.FG,
-                                     insertbackground=self.GREEN, relief=tk.FLAT,
-                                     highlightthickness=1, highlightcolor=self.GREEN,
-                                     highlightbackground=self.BG4)
-        self.shell_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5, pady=8)
-        self.shell_input.bind("<Return>", self._exec_shell)
-        self.shell_input.bind("<Up>", self._hist_prev)
-        self.shell_input.bind("<Down>", self._hist_next)
+        self._sh_in = tk.Entry(inp, font=("Consolas", 11), bg=C["bg2"], fg=C["fg"],
+                                insertbackground=C["green"], relief=tk.FLAT,
+                                highlightthickness=1, highlightcolor=C["green"],
+                                highlightbackground=C["bg4"])
+        self._sh_in.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5, pady=8)
+        self._sh_in.bind("<Return>", self._sh_exec)
+        self._sh_in.bind("<Up>", self._sh_up)
+        self._sh_in.bind("<Down>", self._sh_down)
 
-        self.root_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(inp, text="ROOT", variable=self.root_var, bg=self.BG0, fg=self.RED,
-                       selectcolor=self.BG3, activebackground=self.BG0,
-                       activeforeground=self.RED, font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=8)
+        self._root_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(inp, text="ROOT", variable=self._root_var, bg=C["bg0"], fg=C["red"],
+                       selectcolor=C["red"], activebackground=C["bg0"],
+                       activeforeground=C["red"], font=("Segoe UI", 10, "bold"),
+                       indicatoron=False).pack(side=tk.LEFT, padx=5)
 
-        tk.Button(inp, text="EXECUTE", command=lambda: self._exec_shell(None),
-                  bg=self.GREEN, fg="#000", activebackground="#5ffa7d",
+        tk.Button(inp, text="EXEC", command=lambda: self._sh_exec(None),
+                  bg=C["green"], fg="#000", activebackground="#5ffa7d",
                   font=("Segoe UI", 10, "bold"), relief=tk.FLAT, padx=20, pady=6,
                   cursor="hand2").pack(side=tk.RIGHT, padx=5, pady=8)
-        tk.Button(inp, text="CLEAR", command=self._clear_shell,
-                  bg=self.BG3, fg=self.FG, activebackground=self.RED, activeforeground="#fff",
-                  font=("Segoe UI", 9), relief=tk.FLAT, padx=12, pady=6,
-                  cursor="hand2").pack(side=tk.RIGHT, padx=5, pady=8)
+        tk.Button(inp, text="CLR", command=self._sh_clr,
+                  bg=C["bg3"], fg=C["fg"], activebackground=C["red"],
+                  activeforeground="#fff", font=("Segoe UI", 9), relief=tk.FLAT,
+                  padx=12, pady=6, cursor="hand2").pack(side=tk.RIGHT, padx=5, pady=8)
 
-    # ─── FILE MANAGER ───
-    def _build_file_manager(self):
-        frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text=" Files ")
+    # ─── FILES ───
 
-        toolbar = tk.Frame(frame, bg=self.BG0, height=40)
-        toolbar.pack(fill=tk.X, padx=8, pady=5)
-        toolbar.pack_propagate(False)
+    def _tab_files(self):
+        f = ttk.Frame(self.nb)
+        self.nb.add(f, text=" Files ")
 
-        self.fm_path = tk.StringVar(value="/sdcard/")
-        tk.Entry(toolbar, textvariable=self.fm_path, font=("Consolas", 10),
-                 bg=self.BG2, fg=self.FG, relief=tk.FLAT,
-                 highlightthickness=1, highlightcolor=self.BLUE).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5, pady=5)
+        tb = tk.Frame(f, bg=C["bg0"], height=40)
+        tb.pack(fill=tk.X, padx=8, pady=5)
+        tb.pack_propagate(False)
 
-        for text, cmd, color in [("List", self._fm_list, self.BLUE), ("Push", self._fm_push, self.GREEN),
-                                   ("Pull", self._fm_pull, self.CYAN), ("Delete", self._fm_delete, self.RED),
-                                   ("Mkdir", self._fm_mkdir, self.YELLOW), ("Search", self._fm_search, self.PURPLE),
-                                   ("Up", self._fm_up, self.FG2), ("Refresh", self._fm_list, self.BLUE)]:
-            tk.Button(toolbar, text=text, command=cmd, bg=self.BG3, fg=color,
+        self._fm_path = tk.StringVar(value="/sdcard/")
+        tk.Entry(tb, textvariable=self._fm_path, font=("Consolas", 10),
+                 bg=C["bg2"], fg=C["fg"], relief=tk.FLAT,
+                 highlightthickness=1, highlightcolor=C["blue"]).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5, pady=5)
+
+        for text, cmd, color in [("List", self._fm_list, C["blue"]), ("Push", self._fm_push, C["green"]),
+                                   ("Pull", self._fm_pull, C["cyan"]), ("Del", self._fm_del, C["red"]),
+                                   ("Mkdir", self._fm_mkdir, C["yellow"]), ("Find", self._fm_find, C["purple"]),
+                                   ("Up", self._fm_up, C["fg2"])]:
+            tk.Button(tb, text=text, command=cmd, bg=C["bg3"], fg=color,
                       activebackground=color, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=10, pady=4,
-                      cursor="hand2").pack(side=tk.LEFT, padx=3, pady=5)
+                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT,
+                      padx=10, pady=4, cursor="hand2").pack(side=tk.LEFT, padx=2, pady=5)
 
         cols = ("Perms", "Owner", "Size", "Date", "Name")
-        self.fm_tree = ttk.Treeview(frame, columns=cols, show="headings", height=20)
-        widths = [100, 80, 80, 120, 400]
+        self._fm_tree = ttk.Treeview(f, columns=cols, show="headings", height=20)
+        widths = [100, 80, 80, 110, 420]
         for c, w in zip(cols, widths):
-            self.fm_tree.heading(c, text=c)
-            self.fm_tree.column(c, width=w)
-
-        sb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.fm_tree.yview)
-        self.fm_tree.configure(yscrollcommand=sb.set)
-        self.fm_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=5)
+            self._fm_tree.heading(c, text=c)
+            self._fm_tree.column(c, width=w)
+        sb = ttk.Scrollbar(f, orient=tk.VERTICAL, command=self._fm_tree.yview)
+        self._fm_tree.configure(yscrollcommand=sb.set)
+        self._fm_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=5)
         sb.pack(side=tk.LEFT, fill=tk.Y, pady=5)
-        self.fm_tree.bind("<Double-1>", self._fm_dblclick)
+        self._fm_tree.bind("<Double-1>", self._fm_dbl)
 
-    # ─── APP MANAGER ───
-    def _build_app_manager(self):
-        frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text=" Apps ")
+    # ─── APPS ───
 
-        toolbar = tk.Frame(frame, bg=self.BG0, height=40)
-        toolbar.pack(fill=tk.X, padx=8, pady=5)
-        toolbar.pack_propagate(False)
+    def _tab_apps(self):
+        f = ttk.Frame(self.nb)
+        self.nb.add(f, text=" Apps ")
 
-        self.app_filter = tk.StringVar(value="All")
-        tk.OptionMenu(toolbar, self.app_filter, "All", "System", "Third-Party").pack(side=tk.LEFT, padx=5)
+        tb = tk.Frame(f, bg=C["bg0"], height=40)
+        tb.pack(fill=tk.X, padx=8, pady=5)
+        tb.pack_propagate(False)
 
-        for text, cmd, color in [("Refresh", self._app_refresh, self.BLUE), ("Install APK", self._app_install, self.GREEN),
-                                   ("Uninstall", self._app_uninstall, self.RED), ("Backup", self._app_backup, self.CYAN),
-                                   ("Clear Data", self._app_clear, self.YELLOW), ("Force Stop", self._app_force_stop, self.ORANGE),
-                                   ("Disable", self._app_disable, self.RED), ("Enable", self._app_enable, self.GREEN)]:
-            tk.Button(toolbar, text=text, command=cmd, bg=self.BG3, fg=color,
+        self._app_filter = tk.StringVar(value="All")
+        tk.OptionMenu(tb, self._app_filter, "All", "System", "Third-Party").pack(side=tk.LEFT, padx=5)
+
+        for text, cmd, color in [
+            ("Refresh", self._app_ref, C["blue"]), ("Install", self._app_inst, C["green"]),
+            ("Uninstall", self._app_uninst, C["red"]), ("Backup", self._app_bak, C["cyan"]),
+            ("Clear Data", self._app_clr, C["yellow"]), ("ForceStop", self._app_fstop, C["orange"]),
+            ("Disable", self._app_dis, C["red"]), ("Enable", self._app_en, C["green"]),
+        ]:
+            tk.Button(tb, text=text, command=cmd, bg=C["bg3"], fg=color,
                       activebackground=color, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=10, pady=4,
-                      cursor="hand2").pack(side=tk.LEFT, padx=3, pady=5)
+                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT,
+                      padx=10, pady=4, cursor="hand2").pack(side=tk.LEFT, padx=2, pady=5)
 
-        cols = ("Package Name",)
-        self.app_tree = ttk.Treeview(frame, columns=cols, show="headings", height=22)
-        self.app_tree.heading("Package Name", text="Package Name")
-        self.app_tree.column("Package Name", width=500)
-
-        sb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.app_tree.yview)
-        self.app_tree.configure(yscrollcommand=sb.set)
-        self.app_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=5)
+        cols = ("Package",)
+        self._app_tree = ttk.Treeview(f, columns=cols, show="headings", height=22)
+        self._app_tree.heading("Package", text="Package Name")
+        self._app_tree.column("Package", width=480)
+        sb = ttk.Scrollbar(f, orient=tk.VERTICAL, command=self._app_tree.yview)
+        self._app_tree.configure(yscrollcommand=sb.set)
+        self._app_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=5)
         sb.pack(side=tk.LEFT, fill=tk.Y, pady=5)
 
-        self.app_info = scrolledtext.ScrolledText(frame, wrap=tk.WORD, font=("Consolas", 9),
-                                                   bg=self.BG2, fg=self.FG, width=45,
-                                                   insertbackground=self.FG, relief=tk.FLAT,
-                                                   state=tk.DISABLED, padx=10, pady=10)
-        self.app_info.pack(side=tk.RIGHT, fill=tk.BOTH, padx=8, pady=5)
+        self._app_info = scrolledtext.ScrolledText(f, wrap=tk.WORD, font=("Consolas", 9),
+                                                     bg=C["bg2"], fg=C["fg"], width=45,
+                                                     insertbackground=C["fg"], relief=tk.FLAT,
+                                                     state=tk.DISABLED, padx=10, pady=10)
+        self._app_info.pack(side=tk.RIGHT, fill=tk.BOTH, padx=8, pady=5)
 
-    # ─── FLASH TAB ───
-    def _build_flash_tab(self):
-        frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text=" Flash & Recovery ")
+    # ─── FLASH ───
 
-        warn = tk.Label(frame, text="DANGER ZONE - Fastboot Flash & Sideload",
-                        bg=self.RED, fg="#fff", font=("Segoe UI", 12, "bold"), pady=8)
-        warn.pack(fill=tk.X, padx=8, pady=(8, 0))
+    def _tab_flash(self):
+        f = ttk.Frame(self.nb)
+        self.nb.add(f, text=" Flash ")
 
-        # Flash section
-        flash = ttk.LabelFrame(frame, text="Fastboot Partition Flash", padding=12)
-        flash.pack(fill=tk.X, padx=8, pady=8)
+        tk.Label(f, text="DANGER ZONE - Flash & Sideload",
+                 bg=C["red"], fg="#fff", font=("Segoe UI", 12, "bold"), pady=8).pack(fill=tk.X, padx=8, pady=(8, 0))
 
-        tk.Label(flash, text="Partition:", bg=self.BG2, fg=self.FG).grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.flash_part = tk.StringVar(value="boot")
-        tk.Entry(flash, textvariable=self.flash_part, font=("Consolas", 10),
-                 bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=20).grid(row=0, column=1, padx=5, pady=5)
+        fl = ttk.LabelFrame(f, text="Fastboot Flash", padding=10)
+        fl.pack(fill=tk.X, padx=8, pady=5)
 
-        tk.Label(flash, text="Image:", bg=self.BG2, fg=self.FG).grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.flash_file = tk.StringVar()
-        tk.Entry(flash, textvariable=self.flash_file, font=("Consolas", 10),
-                 bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=50).grid(row=1, column=1, padx=5, pady=5)
-        tk.Button(flash, text="Browse", command=self._browse_flash,
-                  bg=self.BG3, fg=self.FG, relief=tk.FLAT, padx=10, cursor="hand2").grid(row=1, column=2, padx=5)
+        tk.Label(fl, text="Partition:", bg=C["bg2"], fg=C["fg"]).grid(row=0, column=0, sticky=tk.W, pady=3)
+        self._fl_part = tk.StringVar(value="boot")
+        tk.Entry(fl, textvariable=self._fl_part, font=("Consolas", 10),
+                 bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=15).grid(row=0, column=1, padx=5, pady=3)
 
-        tk.Button(flash, text="FLASH IMAGE", command=self._flash_image,
-                  bg=self.RED, fg="#fff", activebackground="#ff6b6b",
-                  font=("Segoe UI", 11, "bold"), relief=tk.FLAT, padx=40, pady=10,
-                  cursor="hand2").grid(row=2, column=0, columnspan=3, pady=10)
+        tk.Label(fl, text="Image:", bg=C["bg2"], fg=C["fg"]).grid(row=0, column=2, sticky=tk.W, pady=3, padx=(15, 0))
+        self._fl_file = tk.StringVar()
+        tk.Entry(fl, textvariable=self._fl_file, font=("Consolas", 10),
+                 bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=45).grid(row=0, column=3, padx=5, pady=3)
+        tk.Button(fl, text="Browse", command=self._browse_fl,
+                  bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, padx=10, cursor="hand2").grid(row=0, column=4, padx=5)
+        tk.Button(fl, text="FLASH", command=self._flash,
+                  bg=C["red"], fg="#fff", activebackground="#ff6b6b",
+                  font=("Segoe UI", 10, "bold"), relief=tk.FLAT, padx=25, pady=6,
+                  cursor="hand2").grid(row=0, column=5, padx=10)
 
-        # Quick flash buttons
-        quick = ttk.LabelFrame(frame, text="Quick Partition Flash", padding=12)
-        quick.pack(fill=tk.X, padx=8, pady=8)
-
-        parts = [("boot", "Boot"), ("recovery", "Recovery"), ("system", "System"),
-                 ("vendor", "Vendor"), ("vbmeta", "VBMeta"), ("dtbo", "DTBO"),
-                 ("userdata", "UserData"), ("cache", "Cache"), ("persist", "Persist"),
-                 ("modem", "Modem"), ("super", "Super"), ("product", "Product")]
-        for i, (part, label) in enumerate(parts):
-            tk.Button(quick, text=label, command=lambda p=part: self._quick_flash(p),
-                      bg=self.BG3, fg=self.ORANGE, activebackground=self.ORANGE,
+        # Quick partitions
+        qf = ttk.LabelFrame(f, text="Quick Flash (Fastboot Required)", padding=8)
+        qf.pack(fill=tk.X, padx=8, pady=5)
+        parts = ["boot", "recovery", "system", "vendor", "vbmeta", "dtbo",
+                 "userdata", "cache", "persist", "modem", "super", "product"]
+        for i, part in enumerate(parts):
+            tk.Button(qf, text=part, command=lambda p=part: self._qflash(p),
+                      bg=C["bg3"], fg=C["orange"], activebackground=C["orange"],
                       activeforeground="#fff", font=("Segoe UI", 9, "bold"),
-                      relief=tk.FLAT, padx=15, pady=6, cursor="hand2",
-                      width=10).grid(row=i//6, column=i%6, padx=3, pady=3)
+                      relief=tk.FLAT, padx=12, pady=4, cursor="hand2",
+                      width=10).grid(row=i//6, column=i%6, padx=2, pady=2)
 
         # Sideload
-        side = ttk.LabelFrame(frame, text="Recovery Sideload (OTA / ZIP)", padding=12)
-        side.pack(fill=tk.X, padx=8, pady=8)
+        sl = ttk.LabelFrame(f, text="Sideload (Recovery Required)", padding=10)
+        sl.pack(fill=tk.X, padx=8, pady=5)
+        tk.Label(sl, text="ZIP:", bg=C["bg2"], fg=C["fg"]).grid(row=0, column=0, sticky=tk.W)
+        self._sl_file = tk.StringVar()
+        tk.Entry(sl, textvariable=self._sl_file, font=("Consolas", 10),
+                 bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=55).grid(row=0, column=1, padx=5)
+        tk.Button(sl, text="Browse", command=self._browse_sl,
+                  bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, padx=10, cursor="hand2").grid(row=0, column=2, padx=5)
+        tk.Button(sl, text="SIDELOAD", command=self._sideload,
+                  bg=C["yellow"], fg="#000", activebackground="#ffd966",
+                  font=("Segoe UI", 10, "bold"), relief=tk.FLAT, padx=25, pady=6,
+                  cursor="hand2").grid(row=0, column=3, padx=10)
 
-        tk.Label(side, text="ZIP File:", bg=self.BG2, fg=self.FG).grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.sideload_file = tk.StringVar()
-        tk.Entry(side, textvariable=self.sideload_file, font=("Consolas", 10),
-                 bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=50).grid(row=0, column=1, padx=5, pady=5)
-        tk.Button(side, text="Browse", command=self._browse_sideload,
-                  bg=self.BG3, fg=self.FG, relief=tk.FLAT, padx=10, cursor="hand2").grid(row=0, column=2, padx=5)
-        tk.Button(side, text="SIDELOAD", command=self._sideload,
-                  bg=self.YELLOW, fg="#000", activebackground="#ffd966",
-                  font=("Segoe UI", 10, "bold"), relief=tk.FLAT, padx=30, pady=8,
-                  cursor="hand2").grid(row=1, column=0, columnspan=3, pady=10)
+        # Fastboot tools
+        fb = ttk.LabelFrame(f, text="Fastboot Tools", padding=8)
+        fb.pack(fill=tk.X, padx=8, pady=5)
+        fbt = [("Getvar All", lambda: self._fbv("all")),
+               ("Active Slot", lambda: self._fbv("current-slot")),
+               ("Partitions", lambda: self._fbv("partition-type:all")),
+               ("Erase", self._fb_erase), ("Format", self._fb_format),
+               ("Boot Image", self._fb_boot), ("Update ZIP", self._fb_update)]
+        for i, (text, cmd) in enumerate(fbt):
+            tk.Button(fb, text=text, command=cmd, bg=C["bg3"], fg=C["cyan"],
+                      activebackground=C["cyan"], activeforeground="#000",
+                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT,
+                      padx=12, pady=4, cursor="hand2").grid(row=0, column=i, padx=2, pady=2)
 
-        # Fastboot info
-        info = ttk.LabelFrame(frame, text="Fastboot Info", padding=12)
-        info.pack(fill=tk.X, padx=8, pady=8)
+        self._fl_out = scrolledtext.ScrolledText(f, wrap=tk.WORD, font=("Consolas", 9),
+                                                   bg=C["bg2"], fg=C["fg"], height=8,
+                                                   insertbackground=C["fg"], relief=tk.FLAT,
+                                                   state=tk.DISABLED, padx=10, pady=10)
+        self._fl_out.pack(fill=tk.BOTH, expand=True, padx=8, pady=5)
 
-        for i, (text, cmd) in enumerate([("Getvar All", lambda: self._fb_getvar("all")),
-                                          ("Active Slot", lambda: self._fb_getvar("current-slot")),
-                                          ("Partitions", lambda: self._fb_getvar("partition-type:all")),
-                                          ("Erase Partition", self._fb_erase_dialog),
-                                          ("Format Partition", self._fb_format_dialog),
-                                          ("Boot Image", self._fb_boot_dialog),
-                                          ("Update ZIP", self._fb_update_dialog)]):
-            tk.Button(info, text=text, command=cmd, bg=self.BG3, fg=self.CYAN,
-                      activebackground=self.CYAN, activeforeground="#000",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=6,
-                      cursor="hand2").grid(row=i//4, column=i%4, padx=3, pady=3)
+    # ─── UNLOCK & ROOT ───
 
-        # Output
-        self.flash_out = scrolledtext.ScrolledText(frame, wrap=tk.WORD, font=("Consolas", 9),
-                                                    bg=self.BG2, fg=self.FG, height=10,
-                                                    insertbackground=self.FG, relief=tk.FLAT,
-                                                    state=tk.DISABLED, padx=10, pady=10)
-        self.flash_out.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+    def _tab_unlock(self):
+        f = ttk.Frame(self.nb)
+        self.nb.add(f, text=" Unlock & Root ")
 
-    # ─── UNLOCK & ROOT TAB ───
-    def _build_unlock_tab(self):
-        frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text=" Unlock & Root ")
-
-        warn = tk.Label(frame, text="EXPERT ZONE - These operations can PERMANENTLY brick your device!",
-                        bg=self.RED, fg="#fff", font=("Segoe UI", 12, "bold"), pady=10)
-        warn.pack(fill=tk.X, padx=8, pady=(8, 0))
+        tk.Label(f, text="EXPERT ZONE - Can permanently damage device!",
+                 bg=C["red"], fg="#fff", font=("Segoe UI", 12, "bold"), pady=10).pack(fill=tk.X, padx=8, pady=(8, 0))
 
         # Bootloader
-        bl = ttk.LabelFrame(frame, text="Bootloader Control", padding=12)
-        bl.pack(fill=tk.X, padx=8, pady=8)
-
-        bl_btns = [
-            ("Check Status", self._bl_check, self.BLUE),
-            ("OEM Unlock (Old)", self._bl_oem_unlock, self.RED),
-            ("OEM Lock", self._bl_oem_lock, self.YELLOW),
-            ("Flashing Unlock (New)", self._bl_flashing_unlock, self.RED),
-            ("Flashing Lock", self._bl_flashing_lock, self.YELLOW),
-        ]
-        for i, (text, cmd, color) in enumerate(bl_btns):
-            tk.Button(bl, text=text, command=cmd, bg=self.BG3, fg=color,
+        bl = ttk.LabelFrame(f, text="Bootloader Control", padding=10)
+        bl.pack(fill=tk.X, padx=8, pady=5)
+        for i, (text, cmd, color) in enumerate([
+            ("Check", self._bl_chk, C["blue"]),
+            ("OEM Unlock (Old)", self._bl_ounlock, C["red"]),
+            ("OEM Lock", self._bl_olock, C["yellow"]),
+            ("Flashing Unlock (New)", self._bl_funlock, C["red"]),
+            ("Flashing Lock", self._bl_flock, C["yellow"]),
+        ]):
+            tk.Button(bl, text=text, command=cmd, bg=C["bg3"], fg=color,
                       activebackground=color, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=20, pady=8,
-                      cursor="hand2").grid(row=0, column=i, padx=5, pady=5)
+                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT,
+                      padx=18, pady=6, cursor="hand2").grid(row=0, column=i, padx=3, pady=3)
 
         # Root
-        root = ttk.LabelFrame(frame, text="Root & Privilege Escalation", padding=12)
-        root.pack(fill=tk.X, padx=8, pady=8)
-
-        root_btns = [
-            ("Check Root", self._root_check, self.BLUE),
-            ("Push Magisk", self._root_magisk, self.GREEN),
-            ("Remount RW", self._root_remount, self.ORANGE),
-            ("Disable Verity", self._root_disable_verity, self.RED),
-            ("Enable Verity", self._root_enable_verity, self.GREEN),
-            ("SELinux Enforcing", lambda: self._set_selinux("enforcing"), self.BLUE),
-            ("SELinux Permissive", lambda: self._set_selinux("permissive"), self.YELLOW),
-        ]
-        for i, (text, cmd, color) in enumerate(root_btns):
-            tk.Button(root, text=text, command=cmd, bg=self.BG3, fg=color,
+        rt = ttk.LabelFrame(f, text="Root & SE", padding=10)
+        rt.pack(fill=tk.X, padx=8, pady=5)
+        for i, (text, cmd, color) in enumerate([
+            ("Check Root", self._rt_chk, C["blue"]),
+            ("Push Magisk", self._rt_magisk, C["green"]),
+            ("Remount RW", self._rt_remount, C["orange"]),
+            ("Disable Verity", self._rt_dverity, C["red"]),
+            ("Enable Verity", self._rt_everity, C["green"]),
+            ("SELinux Enforcing", lambda: self._selinux("enforcing"), C["blue"]),
+            ("SELinux Permissive", lambda: self._selinux("permissive"), C["yellow"]),
+        ]):
+            tk.Button(rt, text=text, command=cmd, bg=C["bg3"], fg=color,
                       activebackground=color, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=8,
-                      cursor="hand2").grid(row=i//4, column=i%4, padx=5, pady=5)
+                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT,
+                      padx=12, pady=6, cursor="hand2").grid(row=i//4, column=i%4, padx=3, pady=3)
 
-        # Lock bypass
-        bypass = ttk.LabelFrame(frame, text="Lock Screen Bypass (OWN DEVICE ONLY)", padding=12)
-        bypass.pack(fill=tk.X, padx=8, pady=8)
+        # Bypass
+        bp = ttk.LabelFrame(f, text="Lock Bypass (OWN DEVICE ONLY)", padding=10)
+        bp.pack(fill=tk.X, padx=8, pady=5)
+        for i, (text, method, color) in enumerate([
+            ("Swipe", "swipe", C["blue"]), ("Null PIN", "null_pin", C["yellow"]),
+            ("Settings Crash", "settings", C["orange"]),
+            ("Delete Keys", "delete_keys", C["red"]),
+            ("FRP Delete", "frp", C["red"]),
+        ]):
+            tk.Button(bp, text=text, command=lambda m=method: self._bypass(m),
+                      bg=C["bg3"], fg=color, activebackground=color,
+                      activeforeground="#fff", font=("Segoe UI", 9, "bold"),
+                      relief=tk.FLAT, padx=15, pady=6, cursor="hand2").grid(
+                row=0, column=i, padx=3, pady=3)
 
-        bypass_btns = [
-            ("Swipe Unlock", lambda: self._bypass("swipe"), self.BLUE),
-            ("Null PIN", lambda: self._bypass("null_pin"), self.YELLOW),
-            ("Settings Crash", lambda: self._bypass("settings_crash"), self.ORANGE),
-            ("Delete Keys (Root)", lambda: self._bypass("delete_keys"), self.RED),
-            ("FRP Data Delete (Root)", lambda: self._bypass("frp"), self.RED),
-        ]
-        for i, (text, cmd, color) in enumerate(bypass_btns):
-            tk.Button(bypass, text=text, command=cmd, bg=self.BG3, fg=color,
-                      activebackground=color, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=8,
-                      cursor="hand2").grid(row=0, column=i, padx=5, pady=5)
+        self._ul_out = scrolledtext.ScrolledText(f, wrap=tk.WORD, font=("Consolas", 9),
+                                                   bg=C["bg2"], fg=C["fg"], height=10,
+                                                   insertbackground=C["fg"], relief=tk.FLAT,
+                                                   state=tk.DISABLED, padx=10, pady=10)
+        self._ul_out.pack(fill=tk.BOTH, expand=True, padx=8, pady=5)
 
-        self.unlock_out = scrolledtext.ScrolledText(frame, wrap=tk.WORD, font=("Consolas", 9),
-                                                     bg=self.BG2, fg=self.FG, height=12,
-                                                     insertbackground=self.FG, relief=tk.FLAT,
-                                                     state=tk.DISABLED, padx=10, pady=10)
-        self.unlock_out.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+    # ─── DIAGNOSTICS ───
 
-    # ─── DIAGNOSTICS TAB ───
-    def _build_diagnostics(self):
-        frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text=" Diagnostics ")
+    def _tab_diag(self):
+        f = ttk.Frame(self.nb)
+        self.nb.add(f, text=" Diagnostics ")
 
-        ctrl = tk.Frame(frame, bg=self.BG0, height=40)
+        ctrl = tk.Frame(f, bg=C["bg0"], height=35)
         ctrl.pack(fill=tk.X, padx=8, pady=5)
         ctrl.pack_propagate(False)
-
-        diag_btns = [
-            ("Logcat", self._diag_logcat, self.BLUE),
-            ("dmesg", self._diag_dmesg, self.CYAN),
-            ("Processes", self._diag_procs, self.GREEN),
-            ("Battery", self._diag_battery, self.YELLOW),
-            ("Memory", self._diag_memory, self.PURPLE),
-            ("CPU Info", self._diag_cpu, self.ORANGE),
-            ("Thermal", self._diag_thermal, self.RED),
-            ("Disk Usage", self._diag_disk, self.CYAN),
-            ("Mounts", self._diag_mounts, self.FG2),
-            ("Kernel", self._diag_kernel, self.BLUE),
-            ("Partitions", self._diag_partitions, self.GREEN),
-            ("Services", self._diag_services, self.PURPLE),
-            ("Current App", self._diag_current_app, self.YELLOW),
-            ("Clear", self._diag_clear, self.RED),
-        ]
-        for text, cmd, color in diag_btns:
-            tk.Button(ctrl, text=text, command=cmd, bg=self.BG3, fg=color,
+        for text, cmd, color in [
+            ("Logcat", self._d_logcat, C["blue"]), ("dmesg", self._d_dmesg, C["cyan"]),
+            ("Procs", self._d_procs, C["green"]), ("Battery", self._d_bat, C["yellow"]),
+            ("Memory", self._d_mem, C["purple"]), ("CPU", self._d_cpu, C["orange"]),
+            ("Thermal", self._d_thermal, C["red"]), ("Disk", self._d_disk, C["cyan"]),
+            ("Mounts", self._d_mounts, C["fg2"]), ("Kernel", self._d_kern, C["blue"]),
+            ("Parts", self._d_parts, C["green"]), ("Services", self._d_svc, C["purple"]),
+            ("Curr App", self._d_cur, C["yellow"]), ("Clear", self._d_clr, C["red"]),
+        ]:
+            tk.Button(ctrl, text=text, command=cmd, bg=C["bg3"], fg=color,
                       activebackground=color, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=10, pady=4,
-                      cursor="hand2").pack(side=tk.LEFT, padx=2, pady=5)
+                      font=("Segoe UI", 8, "bold"), relief=tk.FLAT,
+                      padx=8, pady=3, cursor="hand2").pack(side=tk.LEFT, padx=1, pady=3)
 
-        self.diag_out = scrolledtext.ScrolledText(frame, wrap=tk.WORD, font=("Consolas", 9),
-                                                   bg=self.BG2, fg=self.FG,
-                                                   insertbackground=self.FG, relief=tk.FLAT,
-                                                   state=tk.DISABLED, padx=10, pady=10)
-        self.diag_out.pack(fill=tk.BOTH, expand=True, padx=8, pady=5)
+        self._d_out = scrolledtext.ScrolledText(f, wrap=tk.WORD, font=("Consolas", 9),
+                                                  bg=C["bg2"], fg=C["fg"],
+                                                  insertbackground=C["fg"], relief=tk.FLAT,
+                                                  state=tk.DISABLED, padx=10, pady=10)
+        self._d_out.pack(fill=tk.BOTH, expand=True, padx=8, pady=5)
 
-    # ─── NETWORK TAB ───
-    def _build_network_tab(self):
-        frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text=" Network ")
+    # ─── NETWORK ───
 
-        # Wireless ADB
-        wifi = ttk.LabelFrame(frame, text="Wireless ADB", padding=12)
-        wifi.pack(fill=tk.X, padx=8, pady=8)
+    def _tab_network(self):
+        f = ttk.Frame(self.nb)
+        self.nb.add(f, text=" Network ")
 
-        tk.Label(wifi, text="IP:", bg=self.BG2, fg=self.FG).grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.wifi_ip = tk.StringVar()
-        tk.Entry(wifi, textvariable=self.wifi_ip, font=("Consolas", 10),
-                 bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=20).grid(row=0, column=1, padx=5, pady=5)
-        tk.Label(wifi, text="Port:", bg=self.BG2, fg=self.FG).grid(row=0, column=2, sticky=tk.W, pady=5)
-        self.wifi_port = tk.StringVar(value="5555")
-        tk.Entry(wifi, textvariable=self.wifi_port, font=("Consolas", 10),
-                 bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=8).grid(row=0, column=3, padx=5, pady=5)
+        # WiFi
+        wf = ttk.LabelFrame(f, text="Wireless ADB & Bluetooth", padding=10)
+        wf.pack(fill=tk.X, padx=8, pady=5)
 
-        for text, cmd, color in [("Connect", self._net_connect, self.GREEN),
-                                   ("Disconnect All", self._net_disconnect, self.RED),
-                                   ("Bluetooth Pair", self._net_bt_pair, self.PURPLE),
-                                   ("Bluetooth Connect", self._net_bt_connect, self.CYAN)]:
-            tk.Button(wifi, text=text, command=cmd, bg=self.BG3, fg=color,
+        tk.Label(wf, text="IP/Addr:", bg=C["bg2"], fg=C["fg"], font=("Segoe UI", 10)).grid(row=0, column=0, sticky=tk.W, pady=3)
+        self._wifi_ip = tk.StringVar()
+        tk.Entry(wf, textvariable=self._wifi_ip, font=("Consolas", 10),
+                 bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=18).grid(row=0, column=1, padx=3, pady=3)
+        tk.Label(wf, text="Port:", bg=C["bg2"], fg=C["fg"]).grid(row=0, column=2, sticky=tk.W, pady=3, padx=(10, 0))
+        self._wifi_port = tk.StringVar(value="5555")
+        tk.Entry(wf, textvariable=self._wifi_port, font=("Consolas", 10),
+                 bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=6).grid(row=0, column=3, padx=3, pady=3)
+
+        for i, (text, cmd, color) in enumerate([
+            ("WiFi Connect", self._net_connect, C["green"]),
+            ("Disconnect All", self._net_disconn, C["red"]),
+            ("BT Pair", self._net_btp, C["purple"]),
+            ("BT Connect", self._net_btc, C["cyan"]),
+        ]):
+            tk.Button(wf, text=text, command=cmd, bg=C["bg3"], fg=color,
                       activebackground=color, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=6,
-                      cursor="hand2").grid(row=0, column=4 + [("Connect", 0), ("Disconnect All", 1),
-                                                                ("Bluetooth Pair", 2), ("Bluetooth Connect", 3)].index((text, 0)),
-                                           padx=5, pady=5) if False else None
+                      font=("Segoe UI", 8, "bold"), relief=tk.FLAT,
+                      padx=12, pady=4, cursor="hand2").grid(row=1, column=i, padx=2, pady=5)
 
-        # Recreate buttons properly
-        btn_frame = tk.Frame(wifi, bg=self.BG2)
-        btn_frame.grid(row=1, column=0, columnspan=5, pady=10)
-        for text, cmd, color in [("Connect WiFi", self._net_connect, self.GREEN),
-                                   ("Disconnect All", self._net_disconnect, self.RED),
-                                   ("BT Pair", self._net_bt_pair, self.PURPLE),
-                                   ("BT Connect", self._net_bt_connect, self.CYAN)]:
-            tk.Button(btn_frame, text=text, command=cmd, bg=self.BG3, fg=color,
+        # Forwarding
+        fw = ttk.LabelFrame(f, text="Port Forwarding", padding=10)
+        fw.pack(fill=tk.X, padx=8, pady=5)
+
+        tk.Label(fw, text="Local:", bg=C["bg2"], fg=C["fg"]).grid(row=0, column=0, sticky=tk.W, pady=3)
+        self._fwd_l = tk.StringVar(value="tcp:8080")
+        tk.Entry(fw, textvariable=self._fwd_l, font=("Consolas", 10),
+                 bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=14).grid(row=0, column=1, padx=3, pady=3)
+        tk.Label(fw, text="Remote:", bg=C["bg2"], fg=C["fg"]).grid(row=0, column=2, sticky=tk.W, pady=3, padx=(10, 0))
+        self._fwd_r = tk.StringVar(value="tcp:8080")
+        tk.Entry(fw, textvariable=self._fwd_r, font=("Consolas", 10),
+                 bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=14).grid(row=0, column=3, padx=3, pady=3)
+
+        for i, (text, cmd, color) in enumerate([
+            ("Forward", self._net_fwd, C["blue"]),
+            ("List Fwd", self._net_lfwd, C["blue"]),
+            ("Reverse", self._net_rev, C["purple"]),
+            ("List Rev", self._net_lrev, C["purple"]),
+        ]):
+            tk.Button(fw, text=text, command=cmd, bg=C["bg3"], fg=color,
                       activebackground=color, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=6,
-                      cursor="hand2").pack(side=tk.LEFT, padx=5)
-
-        # Port forwarding
-        fwd = ttk.LabelFrame(frame, text="Port Forwarding", padding=12)
-        fwd.pack(fill=tk.X, padx=8, pady=8)
-
-        tk.Label(fwd, text="Local:", bg=self.BG2, fg=self.FG).grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.fwd_local = tk.StringVar(value="tcp:8080")
-        tk.Entry(fwd, textvariable=self.fwd_local, font=("Consolas", 10),
-                 bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=15).grid(row=0, column=1, padx=5, pady=5)
-        tk.Label(fwd, text="Remote:", bg=self.BG2, fg=self.FG).grid(row=0, column=2, sticky=tk.W, pady=5)
-        self.fwd_remote = tk.StringVar(value="tcp:8080")
-        tk.Entry(fwd, textvariable=self.fwd_remote, font=("Consolas", 10),
-                 bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=15).grid(row=0, column=3, padx=5, pady=5)
-
-        for text, cmd in [("Forward", self._net_forward), ("List Forwards", self._net_list_fwd),
-                           ("Reverse", self._net_reverse), ("List Reverse", self._net_list_reverse)]:
-            tk.Button(fwd, text=text, command=cmd, bg=self.BG3, fg=self.BLUE,
-                      activebackground=self.BLUE, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=6,
-                      cursor="hand2").grid(row=0, column=4, padx=5, pady=5) if text == "Forward" else None
-
-        fwd_btns = tk.Frame(fwd, bg=self.BG2)
-        fwd_btns.grid(row=1, column=0, columnspan=5, pady=10)
-        for text, cmd in [("Forward", self._net_forward), ("List Forwards", self._net_list_fwd),
-                           ("Reverse", self._net_reverse), ("List Reverse", self._net_list_reverse)]:
-            tk.Button(fwd_btns, text=text, command=cmd, bg=self.BG3, fg=self.BLUE,
-                      activebackground=self.BLUE, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=6,
-                      cursor="hand2").pack(side=tk.LEFT, padx=5)
+                      font=("Segoe UI", 8, "bold"), relief=tk.FLAT,
+                      padx=12, pady=4, cursor="hand2").grid(row=1, column=i, padx=2, pady=5)
 
         # Proxy
-        proxy = ttk.LabelFrame(frame, text="Proxy", padding=12)
-        proxy.pack(fill=tk.X, padx=8, pady=8)
+        px = ttk.LabelFrame(f, text="Proxy", padding=10)
+        px.pack(fill=tk.X, padx=8, pady=5)
 
-        tk.Label(proxy, text="Proxy (host:port):", bg=self.BG2, fg=self.FG).grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.proxy_addr = tk.StringVar()
-        tk.Entry(proxy, textvariable=self.proxy_addr, font=("Consolas", 10),
-                 bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=30).grid(row=0, column=1, padx=5, pady=5)
-        for text, cmd, color in [("Set", self._net_set_proxy, self.GREEN), ("Remove", self._net_rm_proxy, self.RED)]:
-            tk.Button(proxy, text=text, command=cmd, bg=self.BG3, fg=color,
-                      activebackground=color, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=6,
-                      cursor="hand2").grid(row=0, column=2, padx=5, pady=5) if text == "Set" else None
+        tk.Label(px, text="Proxy (host:port):", bg=C["bg2"], fg=C["fg"]).grid(row=0, column=0, sticky=tk.W, pady=3)
+        self._proxy = tk.StringVar()
+        tk.Entry(px, textvariable=self._proxy, font=("Consolas", 10),
+                 bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=35).grid(row=0, column=1, padx=3, sticky=tk.W)
+        tk.Button(px, text="Set", command=self._net_setpx, bg=C["bg3"], fg=C["green"],
+                  activebackground=C["green"], activeforeground="#000",
+                  font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=4,
+                  cursor="hand2").grid(row=0, column=2, padx=5, pady=3)
+        tk.Button(px, text="Remove", command=self._net_rmpx, bg=C["bg3"], fg=C["red"],
+                  activebackground=C["red"], activeforeground="#fff",
+                  font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=4,
+                  cursor="hand2").grid(row=0, column=3, padx=5, pady=3)
 
-        proxy_btns = tk.Frame(proxy, bg=self.BG2)
-        proxy_btns.grid(row=0, column=2, padx=5)
-        for text, cmd, color in [("Set", self._net_set_proxy, self.GREEN), ("Remove", self._net_rm_proxy, self.RED)]:
-            tk.Button(proxy_btns, text=text, command=cmd, bg=self.BG3, fg=color,
-                      activebackground=color, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=6,
-                      cursor="hand2").pack(side=tk.LEFT, padx=5)
+        self._net_out = scrolledtext.ScrolledText(f, wrap=tk.WORD, font=("Consolas", 9),
+                                                    bg=C["bg2"], fg=C["fg"], height=12,
+                                                    insertbackground=C["fg"], relief=tk.FLAT,
+                                                    state=tk.DISABLED, padx=10, pady=10)
+        self._net_out.pack(fill=tk.BOTH, expand=True, padx=8, pady=5)
 
-        self.net_out = scrolledtext.ScrolledText(frame, wrap=tk.WORD, font=("Consolas", 9),
-                                                  bg=self.BG2, fg=self.FG, height=15,
-                                                  insertbackground=self.FG, relief=tk.FLAT,
-                                                  state=tk.DISABLED, padx=10, pady=10)
-        self.net_out.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+    # ─── AUTOMATION ───
 
-    # ─── AUTOMATION TAB ───
-    def _build_automation_tab(self):
-        frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text=" Automation ")
+    def _tab_auto(self):
+        f = ttk.Frame(self.nb)
+        self.nb.add(f, text=" Automation ")
 
         # Touch
-        touch = ttk.LabelFrame(frame, text="Touch & Input", padding=12)
-        touch.pack(fill=tk.X, padx=8, pady=8)
+        tc = ttk.LabelFrame(f, text="Touch & Input", padding=10)
+        tc.pack(fill=tk.X, padx=8, pady=5)
 
-        tk.Label(touch, text="X:", bg=self.BG2, fg=self.FG).grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.tap_x = tk.StringVar(value="540")
-        tk.Entry(touch, textvariable=self.tap_x, font=("Consolas", 10),
-                 bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=8).grid(row=0, column=1, padx=3)
-        tk.Label(touch, text="Y:", bg=self.BG2, fg=self.FG).grid(row=0, column=2, sticky=tk.W, pady=5)
-        self.tap_y = tk.StringVar(value="960")
-        tk.Entry(touch, textvariable=self.tap_y, font=("Consolas", 10),
-                 bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=8).grid(row=0, column=3, padx=3)
+        tk.Label(tc, text="X:", bg=C["bg2"], fg=C["fg"]).grid(row=0, column=0, sticky=tk.W, pady=3)
+        self._tap_x = tk.StringVar(value="540")
+        tk.Entry(tc, textvariable=self._tap_x, font=("Consolas", 10),
+                 bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=6).grid(row=0, column=1, padx=2)
+        tk.Label(tc, text="Y:", bg=C["bg2"], fg=C["fg"]).grid(row=0, column=2, sticky=tk.W, pady=3)
+        self._tap_y = tk.StringVar(value="960")
+        tk.Entry(tc, textvariable=self._tap_y, font=("Consolas", 10),
+                 bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=6).grid(row=0, column=3, padx=2)
 
-        for text, cmd in [("Tap", self._auto_tap), ("Long Press", self._auto_longpress)]:
-            tk.Button(touch, text=text, command=cmd, bg=self.BG3, fg=self.BLUE,
-                      activebackground=self.BLUE, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=6,
-                      cursor="hand2").grid(row=0, column=4, padx=5) if text == "Tap" else None
-
-        tap_btns = tk.Frame(touch, bg=self.BG2)
-        tap_btns.grid(row=0, column=4, padx=5)
-        for text, cmd in [("Tap", self._auto_tap), ("Long Press", self._auto_longpress)]:
-            tk.Button(tap_btns, text=text, command=cmd, bg=self.BG3, fg=self.BLUE,
-                      activebackground=self.BLUE, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=6,
-                      cursor="hand2").pack(side=tk.LEFT, padx=3)
+        for text, cmd in [("Tap", self._a_tap), ("LongPress", self._a_lpress)]:
+            tk.Button(tc, text=text, command=cmd, bg=C["bg3"], fg=C["blue"],
+                      activebackground=C["blue"], activeforeground="#000",
+                      font=("Segoe UI", 8, "bold"), relief=tk.FLAT,
+                      padx=12, pady=4, cursor="hand2").grid(
+                row=0, column=4 if text == "Tap" else 5, padx=2)
 
         # Swipe
-        tk.Label(touch, text="Swipe X1 Y1 X2 Y2:", bg=self.BG2, fg=self.FG).grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.swipe_vars = [tk.StringVar(value=v) for v in ["540", "1800", "540", "600"]]
-        for i, var in enumerate(self.swipe_vars):
-            tk.Entry(touch, textvariable=var, font=("Consolas", 10),
-                     bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=6).grid(row=1, column=i+1, padx=2)
-        tk.Button(touch, text="Swipe", command=self._auto_swipe, bg=self.BG3, fg=self.CYAN,
-                  activebackground=self.CYAN, activeforeground="#000",
-                  font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=6,
-                  cursor="hand2").grid(row=1, column=5, padx=5)
+        tk.Label(tc, text="X1 Y1 X2 Y2:", bg=C["bg2"], fg=C["fg"]).grid(row=1, column=0, sticky=tk.W, pady=3)
+        self._sw_vars = [tk.StringVar(value=v) for v in ["540", "1800", "540", "600"]]
+        for i, var in enumerate(self._sw_vars):
+            tk.Entry(tc, textvariable=var, font=("Consolas", 10),
+                     bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=5).grid(row=1, column=i+1, padx=1)
+        tk.Button(tc, text="Swipe", command=self._a_swipe, bg=C["bg3"], fg=C["cyan"],
+                  activebackground=C["cyan"], activeforeground="#000",
+                  font=("Segoe UI", 8, "bold"), relief=tk.FLAT,
+                  padx=12, pady=4, cursor="hand2").grid(row=1, column=5, padx=2)
 
         # Text
-        tk.Label(touch, text="Text:", bg=self.BG2, fg=self.FG).grid(row=2, column=0, sticky=tk.W, pady=5)
-        self.input_text_var = tk.StringVar()
-        tk.Entry(touch, textvariable=self.input_text_var, font=("Consolas", 10),
-                 bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=40).grid(row=2, column=1, columnspan=4, padx=5, sticky=tk.W)
-        tk.Button(touch, text="Send Text", command=self._auto_text, bg=self.BG3, fg=self.GREEN,
-                  activebackground=self.GREEN, activeforeground="#000",
-                  font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=6,
-                  cursor="hand2").grid(row=2, column=5, padx=5)
+        tk.Label(tc, text="Text:", bg=C["bg2"], fg=C["fg"]).grid(row=2, column=0, sticky=tk.W, pady=3)
+        self._in_text = tk.StringVar()
+        tk.Entry(tc, textvariable=self._in_text, font=("Consolas", 10),
+                 bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=40).grid(
+            row=2, column=1, columnspan=4, padx=2, sticky=tk.W)
+        tk.Button(tc, text="Send", command=self._a_text, bg=C["bg3"], fg=C["green"],
+                  activebackground=C["green"], activeforeground="#000",
+                  font=("Segoe UI", 8, "bold"), relief=tk.FLAT,
+                  padx=15, pady=4, cursor="hand2").grid(row=2, column=5, padx=2)
 
         # Keys
-        keys = ttk.LabelFrame(frame, text="Key Events", padding=12)
-        keys.pack(fill=tk.X, padx=8, pady=8)
-
-        key_list = [
+        ky = ttk.LabelFrame(f, text="Key Events", padding=8)
+        ky.pack(fill=tk.X, padx=8, pady=5)
+        klist = [
             ("HOME", "3"), ("BACK", "4"), ("POWER", "26"), ("VOL+", "24"),
             ("VOL-", "25"), ("MENU", "82"), ("ENTER", "66"), ("DEL", "67"),
             ("TAB", "61"), ("ESC", "111"), ("CAMERA", "27"), ("MUTE", "164"),
-            ("BRIGHT+", "221"), ("BRIGHT-", "220"), ("MEDIA_PLAY", "126"),
-            ("MEDIA_PAUSE", "127"), ("MEDIA_NEXT", "87"), ("MEDIA_PREV", "88"),
+            ("BRI+", "221"), ("BRI-", "220"), ("PLAY", "126"), ("PAUSE", "127"),
+            ("NEXT", "87"), ("PREV", "88"),
         ]
-        for i, (name, code) in enumerate(key_list):
-            tk.Button(keys, text=name, command=lambda c=code: self._auto_key(c),
-                      bg=self.BG3, fg=self.FG, activebackground=self.BLUE,
+        for i, (name, code) in enumerate(klist):
+            tk.Button(ky, text=name, command=lambda c=code: self._a_key(c),
+                      bg=C["bg3"], fg=C["fg"], activebackground=C["blue"],
                       activeforeground="#fff", font=("Segoe UI", 8, "bold"),
-                      relief=tk.FLAT, padx=8, pady=5, cursor="hand2",
-                      width=10).grid(row=i//6, column=i%6, padx=2, pady=2)
+                      relief=tk.FLAT, padx=6, pady=3, cursor="hand2",
+                      width=7).grid(row=i//9, column=i%9, padx=1, pady=1)
 
-        # Monkey
-        monkey = ttk.LabelFrame(frame, text="Monkey Stress Test", padding=12)
-        monkey.pack(fill=tk.X, padx=8, pady=8)
-
-        tk.Label(monkey, text="Events:", bg=self.BG2, fg=self.FG).grid(row=0, column=0, sticky=tk.W)
-        self.monkey_events = tk.StringVar(value="5000")
-        tk.Entry(monkey, textvariable=self.monkey_events, font=("Consolas", 10),
-                 bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=10).grid(row=0, column=1, padx=5)
-        tk.Label(monkey, text="Package:", bg=self.BG2, fg=self.FG).grid(row=0, column=2, sticky=tk.W)
-        self.monkey_pkg = tk.StringVar()
-        tk.Entry(monkey, textvariable=self.monkey_pkg, font=("Consolas", 10),
-                 bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=30).grid(row=0, column=3, padx=5)
-        tk.Button(monkey, text="RUN MONKEY", command=self._auto_monkey,
-                  bg=self.RED, fg="#fff", activebackground="#ff6b6b",
-                  font=("Segoe UI", 10, "bold"), relief=tk.FLAT, padx=30, pady=8,
-                  cursor="hand2").grid(row=0, column=4, padx=15)
+        # Monkey + Dev
+        mk = ttk.LabelFrame(f, text="Monkey Test", padding=8)
+        mk.pack(fill=tk.X, padx=8, pady=5)
+        tk.Label(mk, text="Events:", bg=C["bg2"], fg=C["fg"]).grid(row=0, column=0, sticky=tk.W)
+        self._mk_ev = tk.StringVar(value="5000")
+        tk.Entry(mk, textvariable=self._mk_ev, font=("Consolas", 10),
+                 bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=8).grid(row=0, column=1, padx=3)
+        tk.Label(mk, text="Pkg:", bg=C["bg2"], fg=C["fg"]).grid(row=0, column=2, sticky=tk.W)
+        self._mk_pkg = tk.StringVar()
+        tk.Entry(mk, textvariable=self._mk_pkg, font=("Consolas", 10),
+                 bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=25).grid(row=0, column=3, padx=3)
+        tk.Button(mk, text="RUN MONKEY", command=self._a_monkey,
+                  bg=C["red"], fg="#fff", activebackground="#ff6b6b",
+                  font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=20, pady=6,
+                  cursor="hand2").grid(row=0, column=4, padx=10)
 
         # Dev options
-        dev = ttk.LabelFrame(frame, text="Developer Options Quick Toggles", padding=12)
-        dev.pack(fill=tk.X, padx=8, pady=8)
-
-        dev_btns = [
-            ("Enable Dev Options", self._dev_enable, self.GREEN),
-            ("Stay Awake", self._dev_stay_awake, self.BLUE),
-            ("Disable Animations", lambda: self._dev_anim(0), self.YELLOW),
-            ("Show Touches", self._dev_show_touches, self.CYAN),
-            ("Pointer Location", self._dev_pointer, self.PURPLE),
-            ("Mock Location", self._dev_mock_loc, self.ORANGE),
-            ("Reset DPI", self._dev_reset_dpi, self.BLUE),
-            ("Reset Resolution", self._dev_reset_res, self.BLUE),
-            ("Open URL...", self._dev_open_url, self.GREEN),
+        dv = ttk.LabelFrame(f, text="Dev Options", padding=8)
+        dv.pack(fill=tk.X, padx=8, pady=5)
+        dbtns = [
+            ("Enable Dev", self._dv_en, C["green"]), ("Stay Awake", self._dv_sw, C["blue"]),
+            ("Anim OFF", lambda: self._dv_anim(0), C["yellow"]), ("Show Touch", self._dv_st, C["cyan"]),
+            ("Pointer", self._dv_ptr, C["purple"]), ("Mock Loc", self._dv_ml, C["orange"]),
+            ("Reset DPI", self._dv_rdpi, C["blue"]), ("Reset Res", self._dv_rres, C["blue"]),
+            ("Open URL...", self._dv_url, C["green"]),
         ]
-        for i, (text, cmd, color) in enumerate(dev_btns):
-            tk.Button(dev, text=text, command=cmd, bg=self.BG3, fg=color,
+        for i, (text, cmd, color) in enumerate(dbtns):
+            tk.Button(dv, text=text, command=cmd, bg=C["bg3"], fg=color,
                       activebackground=color, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=12, pady=6,
-                      cursor="hand2").grid(row=i//5, column=i%5, padx=3, pady=3)
+                      font=("Segoe UI", 8, "bold"), relief=tk.FLAT,
+                      padx=10, pady=4, cursor="hand2").grid(row=0, column=i, padx=2, pady=2)
 
-        self.auto_out = scrolledtext.ScrolledText(frame, wrap=tk.WORD, font=("Consolas", 9),
-                                                   bg=self.BG2, fg=self.FG, height=8,
-                                                   insertbackground=self.FG, relief=tk.FLAT,
-                                                   state=tk.DISABLED, padx=10, pady=10)
-        self.auto_out.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        self._a_out = scrolledtext.ScrolledText(f, wrap=tk.WORD, font=("Consolas", 9),
+                                                  bg=C["bg2"], fg=C["fg"], height=6,
+                                                  insertbackground=C["fg"], relief=tk.FLAT,
+                                                  state=tk.DISABLED, padx=10, pady=10)
+        self._a_out.pack(fill=tk.BOTH, expand=True, padx=8, pady=5)
 
-    # ─── ADVANCED TAB ───
-    def _build_advanced_tab(self):
-        frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text=" Advanced ")
+    # ─── ADVANCED ───
 
-        # Properties
-        props = ttk.LabelFrame(frame, text="Build.prop / Properties Editor", padding=12)
-        props.pack(fill=tk.X, padx=8, pady=8)
+    def _tab_adv(self):
+        f = ttk.Frame(self.nb)
+        self.nb.add(f, text=" Advanced ")
 
-        for text, cmd, color in [("Load All Props", self._adv_load_props, self.BLUE),
-                                   ("Save Props", self._adv_save_props, self.GREEN)]:
-            tk.Button(props, text=text, command=cmd, bg=self.BG3, fg=color,
+        # Props
+        pr = ttk.LabelFrame(f, text="Build.prop Editor", padding=10)
+        pr.pack(fill=tk.X, padx=8, pady=5)
+        for i, (text, cmd, color) in enumerate([
+            ("Load Props", self._ad_load, C["blue"]),
+            ("Save Props", self._ad_save, C["green"]),
+        ]):
+            tk.Button(pr, text=text, command=cmd, bg=C["bg3"], fg=color,
                       activebackground=color, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=6,
-                      cursor="hand2").grid(row=0, column=0 if text.startswith("L") else 1, padx=5, pady=5)
+                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT,
+                      padx=15, pady=6, cursor="hand2").grid(row=0, column=i, padx=5, pady=3)
 
-        tk.Label(props, text="Property:", bg=self.BG2, fg=self.FG).grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.prop_key = tk.StringVar()
-        tk.Entry(props, textvariable=self.prop_key, font=("Consolas", 10),
-                 bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=30).grid(row=1, column=1, padx=5, pady=5)
-        tk.Label(props, text="Value:", bg=self.BG2, fg=self.FG).grid(row=1, column=2, sticky=tk.W, pady=5)
-        self.prop_val = tk.StringVar()
-        tk.Entry(props, textvariable=self.prop_val, font=("Consolas", 10),
-                 bg=self.BG3, fg=self.FG, relief=tk.FLAT, width=30).grid(row=1, column=3, padx=5, pady=5)
-        tk.Button(props, text="Set Property", command=self._adv_set_prop,
-                  bg=self.YELLOW, fg="#000", activebackground="#ffd966",
+        tk.Label(pr, text="Prop:", bg=C["bg2"], fg=C["fg"]).grid(row=1, column=0, sticky=tk.W, pady=3)
+        self._ad_key = tk.StringVar()
+        tk.Entry(pr, textvariable=self._ad_key, font=("Consolas", 10),
+                 bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=25).grid(row=1, column=1, padx=3, pady=3)
+        tk.Label(pr, text="Val:", bg=C["bg2"], fg=C["fg"]).grid(row=1, column=2, sticky=tk.W, pady=3, padx=(10, 0))
+        self._ad_val = tk.StringVar()
+        tk.Entry(pr, textvariable=self._ad_val, font=("Consolas", 10),
+                 bg=C["bg3"], fg=C["fg"], relief=tk.FLAT, width=25).grid(row=1, column=3, padx=3, pady=3)
+        tk.Button(pr, text="Set", command=self._ad_set_p,
+                  bg=C["yellow"], fg="#000", activebackground="#ffd966",
                   font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=6,
-                  cursor="hand2").grid(row=1, column=4, padx=10, pady=5)
+                  cursor="hand2").grid(row=1, column=4, padx=10)
 
-        # Settings
-        sett = ttk.LabelFrame(frame, text="Settings Browser", padding=12)
-        sett.pack(fill=tk.X, padx=8, pady=8)
-
-        for text, cmd in [("Global Settings", lambda: self._adv_settings("global")),
-                           ("Secure Settings", lambda: self._adv_settings("secure")),
-                           ("System Settings", lambda: self._adv_settings("system"))]:
-            tk.Button(sett, text=text, command=cmd, bg=self.BG3, fg=self.BLUE,
-                      activebackground=self.BLUE, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=15, pady=6,
-                      cursor="hand2").pack(side=tk.LEFT, padx=5)
+        # Settings browser
+        st = ttk.LabelFrame(f, text="Settings Browser", padding=10)
+        st.pack(fill=tk.X, padx=8, pady=5)
+        for text, ns in [("Global", "global"), ("Secure", "secure"), ("System", "system")]:
+            tk.Button(st, text=text, command=lambda n=ns: self._ad_sett(n),
+                      bg=C["bg3"], fg=C["blue"], activebackground=C["blue"],
+                      activeforeground="#fff", font=("Segoe UI", 9, "bold"),
+                      relief=tk.FLAT, padx=20, pady=6, cursor="hand2").pack(side=tk.LEFT, padx=5)
 
         # Expert tools
-        expert = ttk.LabelFrame(frame, text="Expert Tools", padding=12)
-        expert.pack(fill=tk.X, padx=8, pady=8)
-
-        expert_btns = [
-            ("Dump UI XML", self._adv_dump_ui, self.BLUE),
-            ("Extract Contacts DB", self._adv_contacts, self.CYAN),
-            ("Extract SMS DB", self._adv_sms, self.CYAN),
-            ("WiFi Config (Root)", self._adv_wifi_cfg, self.GREEN),
-            ("List Users", self._adv_users, self.PURPLE),
-            ("List Accounts", self._adv_accounts, self.PURPLE),
-            ("Open URL...", self._adv_open_url, self.GREEN),
-            ("Factory Reset", self._adv_factory_reset, self.RED),
-            ("Wipe Cache", self._adv_wipe_cache, self.RED),
-            ("Full Partition List", self._adv_partition_list, self.ORANGE),
-            ("Partition Info", self._adv_partition_info, self.ORANGE),
-            ("Media Scan", self._adv_media_scan, self.CYAN),
+        ex = ttk.LabelFrame(f, text="Expert Tools", padding=10)
+        ex.pack(fill=tk.X, padx=8, pady=5)
+        ebtns = [
+            ("Dump UI", self._ad_dui, C["blue"]),
+            ("Contacts DB", self._ad_contacts, C["cyan"]),
+            ("SMS DB", self._ad_sms, C["cyan"]),
+            ("WiFi Config", self._ad_wifi, C["green"]),
+            ("List Users", self._ad_users, C["purple"]),
+            ("Accounts", self._ad_accts, C["purple"]),
+            ("Open URL...", self._ad_url, C["green"]),
+            ("Factory Reset", self._ad_freset, C["red"]),
+            ("Wipe Cache", self._ad_wcache, C["red"]),
+            ("Partition List", self._ad_parts, C["orange"]),
+            ("Part. Info", self._ad_pinfo, C["orange"]),
+            ("Media Scan", self._ad_mscan, C["cyan"]),
         ]
-        for i, (text, cmd, color) in enumerate(expert_btns):
-            tk.Button(expert, text=text, command=cmd, bg=self.BG3, fg=color,
+        for i, (text, cmd, color) in enumerate(ebtns):
+            tk.Button(ex, text=text, command=cmd, bg=C["bg3"], fg=color,
                       activebackground=color, activeforeground="#fff",
-                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=12, pady=6,
-                      cursor="hand2").grid(row=i//6, column=i%6, padx=3, pady=3)
+                      font=("Segoe UI", 8, "bold"), relief=tk.FLAT,
+                      padx=10, pady=4, cursor="hand2").grid(row=i//6, column=i%6, padx=2, pady=2)
 
-        # Full ROM flash
-        rom = ttk.LabelFrame(frame, text="Full ROM Flash (Fastboot)", padding=12)
-        rom.pack(fill=tk.X, padx=8, pady=8)
+        # ROM flash
+        rm = ttk.LabelFrame(f, text="Bulk ROM Flash (Select folder with .img files)", padding=10)
+        rm.pack(fill=tk.X, padx=8, pady=5)
+        for text, cmd, color in [
+            ("Flash Package", self._ad_flashpkg, C["red"]),
+            ("Flash + Skip Reboot", self._ad_flashskip, C["orange"]),
+        ]:
+            tk.Button(rm, text=text, command=cmd, bg=C["bg3"], fg=color,
+                      activebackground=color, activeforeground="#fff",
+                      font=("Segoe UI", 9, "bold"), relief=tk.FLAT,
+                      padx=20, pady=8, cursor="hand2").pack(side=tk.LEFT, padx=8)
 
-        tk.Button(rom, text="Select Flash Package (Folder)", command=self._adv_flash_package,
-                  bg=self.RED, fg="#fff", activebackground="#ff6b6b",
-                  font=("Segoe UI", 10, "bold"), relief=tk.FLAT, padx=25, pady=10,
-                  cursor="hand2").pack(side=tk.LEFT, padx=5)
+        self._ad_out = scrolledtext.ScrolledText(f, wrap=tk.WORD, font=("Consolas", 9),
+                                                   bg=C["bg2"], fg=C["fg"], height=10,
+                                                   insertbackground=C["fg"], relief=tk.FLAT,
+                                                   state=tk.DISABLED, padx=10, pady=10)
+        self._ad_out.pack(fill=tk.BOTH, expand=True, padx=8, pady=5)
 
-        tk.Button(rom, text="Flash with --skip-reboot", command=self._adv_flash_skip_reboot,
-                  bg=self.ORANGE, fg="#fff", activebackground="#ffaa44",
-                  font=("Segoe UI", 10, "bold"), relief=tk.FLAT, padx=25, pady=10,
-                  cursor="hand2").pack(side=tk.LEFT, padx=5)
+    # ═══════════════════ LOGIC ═══════════════════
 
-        self.adv_out = scrolledtext.ScrolledText(frame, wrap=tk.WORD, font=("Consolas", 9),
-                                                  bg=self.BG2, fg=self.FG, height=15,
-                                                  insertbackground=self.FG, relief=tk.FLAT,
-                                                  state=tk.DISABLED, padx=10, pady=10)
-        self.adv_out.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-
-    # ==================== LOGIC ====================
-
-    def _log(self, msg, widget=None):
+    def _log(self, msg, w=None):
         ts = datetime.now().strftime("%H:%M:%S")
         line = f"[{ts}] {msg}\n"
-        if widget:
-            widget.configure(state=tk.NORMAL)
-            widget.insert(tk.END, line)
-            widget.see(tk.END)
-            widget.configure(state=tk.DISABLED)
-        self.status_bar.config(text=f"[{ts}] {msg[:100]}")
+        if w:
+            w.configure(state=tk.NORMAL)
+            w.insert(tk.END, line)
+            w.see(tk.END)
+            w.configure(state=tk.DISABLED)
+        self._sbar.config(text=f"[{ts}] {msg[:100]}")
 
-    def _get_out(self):
-        """Get output widget for current tab"""
-        idx = self.notebook.index(self.notebook.select())
-        widgets = [self.info_text, self.shell_out, None, None,
-                   self.flash_out, self.unlock_out, self.diag_out,
-                   self.net_out, self.auto_out, self.adv_out]
-        return widgets[idx] if idx < len(widgets) else None
-
-    def _run_async(self, func, callback=None):
-        def wrapper():
+    def _run(self, func, callback=None):
+        def w():
             try:
-                result = func()
+                r = func()
                 if callback:
-                    self.root.after(0, lambda: callback(result))
-                else:
-                    w = self._get_out()
-                    if w:
-                        self.root.after(0, lambda: self._log(str(result), w))
-                    else:
-                        self.root.after(0, lambda: self._log(str(result)))
+                    self.root.after(0, lambda: callback(r))
             except Exception as e:
-                self.root.after(0, lambda: self._log(f"Error: {e}", self._get_out()))
-        threading.Thread(target=wrapper, daemon=True).start()
+                self.root.after(0, lambda: self._status(f"Error: {e}"))
+        threading.Thread(target=w, daemon=True).start()
+
+    def _status(self, msg):
+        self._sbar.config(text=msg)
 
     def _check(self) -> bool:
         if not self.selected_device:
@@ -868,1055 +796,988 @@ class ADBExpertGUI:
             return False
         return True
 
-    def _refresh_devices(self):
+    # ─── DEVICE REFRESH (ASYNC) ───
+
+    def _refresh(self):
+        """Fast device scan, then async enrich"""
         try:
             self.devices = self.core.get_devices()
-            self.fastboot_devices = self.core.get_fastboot_devices()
+            self.fb_devices = self.core.get_fastboot_devices()
+        except:
+            return
 
-            all_devs = self.devices + self.fastboot_devices
-            labels = []
-            for d in all_devs:
-                status_icon = {"device": "[ADB]", "unauthorized": "[!UNAUTH]", "offline": "[OFFLINE]",
-                               "recovery": "[RECOVERY]", "sideload": "[SIDELOAD]", "fastboot": "[FASTBOOT]"}.get(d.status, f"[{d.status.upper()}]")
-                label = f"{d.serial} | {status_icon} {d.model} {d.brand} {d.device_name}"
-                labels.append(label)
+        all_d = self.devices + self.fb_devices
+        labels = []
+        for d in all_d:
+            icon = {"device": "[ADB]", "unauthorized": "[!AUTH]", "offline": "[OFF]",
+                    "recovery": "[REC]", "sideload": "[SDL]", "fastboot": "[FB]"}.get(d.status, f"[{d.status.upper()}]")
+            labels.append(f"{d.serial} | {icon} {d.model}")
 
-            if not labels:
-                labels = ["No devices connected"]
+        if not labels:
+            labels = ["No devices"]
 
-            self.device_combo['values'] = labels
-
-            if all_devs:
-                self.device_combo.current(0)
-                self._on_device_select(None)
-                self.device_status_dot.config(fg=self.GREEN)
-            else:
-                self.device_status_dot.config(fg=self.RED)
-
-        except Exception as e:
-            self.status_bar.config(text=f"Refresh error: {e}")
+        self.dev_cb['values'] = labels
+        if all_d:
+            self.dev_cb.current(0)
+            self._on_dev_select(None)
+            self._status_dot.config(fg=C["green"])
+            self._status_label.config(text="Device Connected", fg=C["green"])
+        else:
+            self._status_dot.config(fg=C["red"])
+            self._status_label.config(text="No Device", fg=C["red"])
+            self._show_info("No device connected.\n\nConnect via USB or WiFi ADB:\n  Settings > Developer Options > USB Debugging\n  Then run: adb connect <IP>:5555")
 
     def _auto_refresh(self):
-        self._refresh_devices()
-        self.root.after(6000, self._auto_refresh)
+        """Periodic refresh - no enrichment to avoid repeated ADB calls"""
+        try:
+            adb_d = self.core.get_devices()
+            fb_d = self.core.get_fastboot_devices()
+            all_d = adb_d + fb_d
+            if all_d and not self.selected_device:
+                self._refresh()
+        except:
+            pass
+        self.root.after(8000, self._auto_refresh)
+        # Start auto-refresh after first load
 
-    def _on_device_select(self, event):
-        sel = self.device_var.get()
+    def _on_dev_select(self, event):
+        sel = self.dev_var.get()
         if "No devices" in sel:
             self.selected_device = None
-            self.device_status_dot.config(fg=self.RED)
+            self._status_dot.config(fg=C["red"])
+            self._status_label.config(text="No Device", fg=C["red"])
             return
 
         serial = sel.split(" | ")[0]
         self.selected_device = serial
+        self.core.invalidate_cache(serial)
 
-        all_devs = self.devices + self.fastboot_devices
-        for d in all_devs:
+        all_d = self.devices + self.fb_devices
+        device = None
+        for d in all_d:
             if d.serial == serial:
-                if d.is_fastboot:
-                    self.device_status_dot.config(fg=self.ORANGE)
-                elif d.status == "unauthorized":
-                    self.device_status_dot.config(fg=self.YELLOW)
-                else:
-                    self.device_status_dot.config(fg=self.GREEN)
-                self._update_dashboard(d)
+                device = d
                 break
 
-    def _update_dashboard(self, d: DeviceInfo):
-        info = f"""
-╔══════════════════════════════════════════════════════════════╗
-║                    DEVICE INFORMATION                        ║
-╠══════════════════════════════════════════════════════════════╣
-║ Serial Number:    {d.serial:<42}║
-║ Status:           {d.status:<42}║
-║ Model:            {d.model:<42}║
-║ Brand:            {d.brand:<42}║
-║ Device Name:      {d.device_name:<42}║
-║ Android Version:  {d.android_version:<42}║
-║ SDK Version:      {d.sdk_version:<42}║
-║ Security Patch:   {d.security_patch:<42}║
-║ Build Number:     {d.build_number:<42}║
-║ Build Fingerprint:{d.build_fingerprint:<42}║
-║ Product:          {d.product:<42}║
-║ Hardware:         {d.hardware:<42}║
-║ Chipset:          {d.chipset:<42}║
-║ Bootloader:       {d.bootloader:<42}║
-║ Baseband:         {d.baseband:<42}║
-║ Kernel:           {d.kernel_version:<42}║
-║ Battery:          {d.battery_level:<42}║
-║ Battery Status:   {d.battery_status:<42}║
-║ Battery Health:   {d.battery_health:<42}║
-║ Battery Temp:     {d.battery_temp:<42}║
-║ IMEI:             {d.imei:<42}║
-║ Serial (HW):      {d.serial_number:<42}║
-║ Screen:           {d.screen_resolution:<42}║
-║ DPI:              {d.screen_density:<42}║
-║ RAM:              {d.total_ram:<42}║
-║ Storage:          {d.available_storage:<42}║
-║ SELinux:          {d.selinux_mode:<42}║
-║ Encryption:       {d.encryption_state:<42}║
-║ USB Config:       {d.usb_config:<42}║
-║ IP Address:       {d.ip_address:<42}║
-║ WiFi SSID:        {d.wifi_ssid:<42}║
-║ Uptime:           {d.uptime:<42}║
-║ Root Access:      {'YES' if d.root_access else 'NO':<42}║
-║ Magisk:           {'YES' if d.magisk_installed else 'NO':<42}║
-║ TWRP:             {'YES' if d.twrp_installed else 'NO':<42}║
-║ Bootloader:       {'UNLOCKED' if d.bootloader_unlocked else 'LOCKED':<42}║
-║ Emulator:         {'YES' if d.is_emulator else 'NO':<42}║
-╚══════════════════════════════════════════════════════════════╝
-""".strip()
+        if not device:
+            return
 
-        self.info_text.configure(state=tk.NORMAL)
-        self.info_text.delete(1.0, tk.END)
-        self.info_text.insert(tk.END, info)
-        self.info_text.configure(state=tk.DISABLED)
+        # Update status dot
+        if device.is_fastboot:
+            self._status_dot.config(fg=C["orange"])
+            self._status_label.config(text="Fastboot Mode", fg=C["orange"])
+        elif device.status == "unauthorized":
+            self._status_dot.config(fg=C["yellow"])
+            self._status_label.config(text="Unauthorized!", fg=C["yellow"])
+        elif device.status == "offline":
+            self._status_dot.config(fg=C["red"])
+            self._status_label.config(text="Offline", fg=C["red"])
+        else:
+            self._status_dot.config(fg=C["green"])
+            self._status_label.config(text="Online", fg=C["green"])
+
+        # Show basic info immediately
+        self._show_info(f"Serial: {device.serial}\nStatus: {device.status}\nModel: {device.model}\n\nLoading details...")
+
+        # ASYNC ENRICHMENT - No freeze!
+        if device.status == "device" and not device.is_fastboot:
+            self._status("Enriching device info...")
+            self.core.enrich_device_async(serial, self._on_enriched)
+
+    def _on_enriched(self, device: DeviceInfo):
+        """Callback when device info is enriched"""
+        self._update_dash(device)
+        self._status("Ready")
+
+    def _update_dash(self, d: DeviceInfo):
+        info = f"""
+┌──────────────────────────────────────────┐
+│           DEVICE INFORMATION             │
+├──────────────────────────────────────────┤
+│ Serial:       {d.serial:<30}│
+│ Status:       {d.status:<30}│
+│ Model:        {d.model:<30}│
+│ Brand:        {d.brand:<30}│
+│ Device:       {d.device_name:<30}│
+│ Android:      {d.android_version:<30}│
+│ SDK:          {d.sdk_version:<30}│
+│ Security:     {d.security_patch:<30}│
+│ Build:        {d.build_number:<30}│
+│ Fingerprint:  {d.build_fingerprint:<30}│
+│ Hardware:     {d.hardware:<30}│
+│ Chipset:      {d.chipset:<30}│
+│ Bootloader:   {d.bootloader_ver:<30}│
+│ Baseband:     {d.baseband:<30}│
+│ Battery:      {d.battery_level:<30}│
+│ Bat Status:   {d.battery_status:<30}│
+│ Bat Health:   {d.battery_health:<30}│
+│ Bat Temp:     {d.battery_temp:<30}│
+│ IMEI:         {d.imei:<30}│
+│ HW Serial:    {d.serial_number:<30}│
+│ Screen:       {d.screen_resolution:<30}│
+│ DPI:          {d.screen_density:<30}│
+│ RAM:          {d.total_ram:<30}│
+│ Storage:      {d.available_storage:<30}│
+│ SELinux:      {d.selinux_mode:<30}│
+│ Encryption:   {d.encryption_state:<30}│
+│ USB:          {d.usb_config:<30}│
+│ IP:           {d.ip_address:<30}│
+│ WiFi:         {d.wifi_ssid:<30}│
+│ Uptime:       {d.uptime:<30}│
+│ Kernel:       {d.kernel_version:<30}│
+│ Root:         {'YES' if d.root_access else 'NO':<30}│
+│ Magisk:       {'YES' if d.magisk_installed else 'NO':<30}│
+│ TWRP:         {'YES' if d.twrp_installed else 'NO':<30}│
+│ Unlocked:     {'YES' if d.bootloader_unlocked else 'NO':<30}│
+│ Emulator:     {'YES' if d.is_emulator else 'NO':<30}│
+└──────────────────────────────────────────┘""".strip()
+
+        self._show_info(info)
 
         # Update stats
-        stats = {
-            "Status": (d.status, self.GREEN if d.status == "device" else self.YELLOW),
-            "Model": (d.model, self.FG),
-            "Brand": (d.brand, self.FG),
-            "Android": (d.android_version, self.FG),
-            "SDK": (d.sdk_version, self.FG),
-            "Battery": (d.battery_level, self.GREEN),
-            "Root": ("YES" if d.root_access else "NO", self.GREEN if d.root_access else self.RED),
-            "Bootloader": ("UNLOCKED" if d.bootloader_unlocked else "LOCKED", self.RED if d.bootloader_unlocked else self.GREEN),
-            "Chipset": (d.chipset, self.FG),
-            "IMEI": (d.imei, self.FG),
-            "RAM": (d.total_ram, self.FG),
-            "Storage": (d.available_storage, self.FG),
-            "SELinux": (d.selinux_mode, self.GREEN if d.selinux_mode == "Enforcing" else self.YELLOW),
-            "Resolution": (d.screen_resolution, self.FG),
-            "Density": (d.screen_density, self.FG),
-            "Uptime": (d.uptime, self.FG),
-            "Kernel": (d.kernel_version[:30], self.FG),
-            "Magisk": ("YES" if d.magisk_installed else "NO", self.GREEN if d.magisk_installed else self.FG2),
-            "TWRP": ("YES" if d.twrp_installed else "NO", self.GREEN if d.twrp_installed else self.FG2),
-            "WiFi": (d.wifi_ssid, self.CYAN),
+        _, _, _ = d, d, d
+        stats_map = {
+            "Status": (d.status, C["green"] if d.status == "device" else C["yellow"]),
+            "Model": (d.model, C["fg"]),
+            "Brand": (d.brand, C["fg"]),
+            "Android": (d.android_version, C["fg"]),
+            "SDK": (d.sdk_version, C["fg"]),
+            "Battery": (d.battery_level, C["green"]),
+            "Root": ("YES" if d.root_access else "NO", C["green"] if d.root_access else C["red"]),
+            "Bootloader": ("UNLOCKED" if d.bootloader_unlocked else "LOCKED",
+                          C["red"] if d.bootloader_unlocked else C["green"]),
+            "Chipset": (d.chipset, C["fg"]),
+            "IMEI": (d.imei, C["fg"]),
+            "RAM": (d.total_ram, C["fg"]),
+            "Storage": (d.available_storage, C["fg"]),
+            "SELinux": (d.selinux_mode, C["green"] if d.selinux_mode == "Enforcing" else C["yellow"]),
+            "Res": (d.screen_resolution, C["fg"]),
+            "DPI": (d.screen_density, C["fg"]),
+            "Uptime": (d.uptime, C["fg"]),
+            "Kernel": (d.kernel_version[:30] if d.kernel_version else "?", C["fg"]),
+            "Magisk": ("YES" if d.magisk_installed else "NO", C["green"] if d.magisk_installed else C["fg2"]),
+            "TWRP": ("YES" if d.twrp_installed else "NO", C["green"] if d.twrp_installed else C["fg2"]),
+            "WiFi": (d.wifi_ssid, C["cyan"]),
+            "IP": (d.ip_address, C["cyan"]),
+            "Temp": (d.battery_temp, C["fg"]),
         }
-        for key, (val, color) in stats.items():
-            if key in self.stat_labels:
-                self.stat_labels[key].config(text=str(val), fg=color)
+        for key, (val, color) in stats_map.items():
+            if key in self._stats:
+                self._stats[key].config(text=str(val)[:30], fg=color)
 
-    # ─── Callbacks ───
+    def _show_info(self, txt):
+        try:
+            self._info_txt.configure(state=tk.NORMAL)
+            self._info_txt.delete(1.0, tk.END)
+            self._info_txt.insert(tk.END, txt)
+            self._info_txt.configure(state=tk.DISABLED)
+        except:
+            pass
 
-    def _reboot(self, mode):
+    # ─── REBOOT ───
+
+    def _reboot(self, mode=""):
         if not self._check():
             return
-        self._run_async(lambda: self.core.reboot(mode, self.selected_device))
+        self._run(lambda: self.core.reboot(mode, self.selected_device))
 
     def _reboot_edl(self):
         if not self._check():
             return
-        if not messagebox.askyesno("EDL Mode", "Reboot to Emergency Download Mode (Qualcomm 9008)?"):
-            return
-        self._run_async(lambda: self.core.fb_edl(self.selected_device))
+        if messagebox.askyesno("EDL", "Reboot to Qualcomm EDL (9008)?"):
+            self._run(lambda: self.core.fb_edl(self.selected_device))
 
-    def _wifi_connect_dialog(self):
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Connect WiFi ADB")
-        dialog.geometry("350x180")
-        dialog.configure(bg=self.BG2)
-        dialog.transient(self.root)
+    # ─── WIFI DIALOG ───
 
-        tk.Label(dialog, text="IP Address:", bg=self.BG2, fg=self.FG, font=("Segoe UI", 10)).pack(pady=(20, 5))
-        ip_var = tk.StringVar()
-        tk.Entry(dialog, textvariable=ip_var, font=("Consolas", 12), bg=self.BG3, fg=self.FG,
+    def _wifi_dlg(self):
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Connect WiFi ADB")
+        dlg.geometry("350x170")
+        dlg.configure(bg=C["bg2"])
+        dlg.transient(self.root)
+        tk.Label(dlg, text="IP Address:", bg=C["bg2"], fg=C["fg"], font=("Segoe UI", 10)).pack(pady=(20, 5))
+        ip = tk.StringVar()
+        tk.Entry(dlg, textvariable=ip, font=("Consolas", 12), bg=C["bg3"], fg=C["fg"],
                  relief=tk.FLAT, width=25).pack(pady=5)
-        tk.Label(dialog, text="Port: 5555", bg=self.BG2, fg=self.FG2, font=("Segoe UI", 9)).pack()
+        tk.Label(dlg, text="Port: 5555", bg=C["bg2"], fg=C["fg2"]).pack()
 
         def connect():
-            ip = ip_var.get().strip()
-            if ip:
-                self._run_async(lambda: self.core.connect_wifi(ip, 5555, self.selected_device))
-                dialog.destroy()
+            if ip.get().strip():
+                self._run(lambda: self.core.connect_wifi(ip.get().strip(), 5555, self.selected_device))
+                dlg.destroy()
 
-        tk.Button(dialog, text="Connect", command=connect, bg=self.GREEN, fg="#000",
-                  font=("Segoe UI", 10, "bold"), relief=tk.FLAT, padx=30, pady=8, cursor="hand2").pack(pady=15)
+        tk.Button(dlg, text="Connect", command=connect, bg=C["green"], fg="#000",
+                  font=("Segoe UI", 10, "bold"), relief=tk.FLAT, padx=30, pady=8,
+                  cursor="hand2").pack(pady=15)
 
-    def _open_app_dialog(self):
+    def _disconnect_all(self):
+        self._run(lambda: self.core.disconnect_all())
+
+    def _open_app(self):
         if not self._check():
             return
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Open App")
-        dialog.geometry("400x150")
-        dialog.configure(bg=self.BG2)
-        dialog.transient(self.root)
+        pkg = messagebox.askstring("Open App", "Package name:")
+        if pkg:
+            self._run(lambda: self.core.open_app(pkg, self.selected_device))
 
-        tk.Label(dialog, text="Package or Activity:", bg=self.BG2, fg=self.FG, font=("Segoe UI", 10)).pack(pady=(20, 5))
-        pkg_var = tk.StringVar()
-        tk.Entry(dialog, textvariable=pkg_var, font=("Consolas", 12), bg=self.BG3, fg=self.FG,
-                 relief=tk.FLAT, width=35).pack(pady=5)
+    # ─── SHELL ───
 
-        def open_app():
-            pkg = pkg_var.get().strip()
-            if pkg:
-                self._run_async(lambda: self.core.open_app(pkg, device=self.selected_device))
-                dialog.destroy()
-
-        tk.Button(dialog, text="Open", command=open_app, bg=self.GREEN, fg="#000",
-                  font=("Segoe UI", 10, "bold"), relief=tk.FLAT, padx=30, pady=8, cursor="hand2").pack(pady=10)
-
-    # Shell
-    def _exec_shell(self, event):
+    def _sh_exec(self, event):
         if not self._check():
             return
-        cmd = self.shell_input.get().strip()
+        cmd = self._sh_in.get().strip()
         if not cmd:
             return
-        self.command_history.append(cmd)
-        self.history_index = len(self.command_history)
-        self.shell_input.delete(0, tk.END)
-        self._log(f"$ {cmd}", self.shell_out)
+        self.cmd_history.append(cmd)
+        self.hist_idx = len(self.cmd_history)
+        self._sh_in.delete(0, tk.END)
+        self._log(f"$ {cmd}", self._sh_out)
+        root = self._root_var.get()
+        self._run(lambda: self.core.root_shell(cmd, self.selected_device) if root else self.core.shell(cmd, self.selected_device),
+                  lambda r: self._log(r, self._sh_out))
 
-        use_root = self.root_var.get()
-        self._run_async(lambda: self.core.root_shell(cmd, self.selected_device) if use_root else self.core.shell(cmd, self.selected_device))
+    def _sh_up(self, event):
+        if self.hist_idx > 0:
+            self.hist_idx -= 1
+            self._sh_in.delete(0, tk.END)
+            self._sh_in.insert(0, self.cmd_history[self.hist_idx])
 
-    def _hist_prev(self, event):
-        if self.history_index > 0:
-            self.history_index -= 1
-            self.shell_input.delete(0, tk.END)
-            self.shell_input.insert(0, self.command_history[self.history_index])
+    def _sh_down(self, event):
+        if self.hist_idx < len(self.cmd_history) - 1:
+            self.hist_idx += 1
+            self._sh_in.delete(0, tk.END)
+            self._sh_in.insert(0, self.cmd_history[self.hist_idx])
+        elif self.hist_idx == len(self.cmd_history) - 1:
+            self.hist_idx += 1
+            self._sh_in.delete(0, tk.END)
 
-    def _hist_next(self, event):
-        if self.history_index < len(self.command_history) - 1:
-            self.history_index += 1
-            self.shell_input.delete(0, tk.END)
-            self.shell_input.insert(0, self.command_history[self.history_index])
-        elif self.history_index == len(self.command_history) - 1:
-            self.history_index += 1
-            self.shell_input.delete(0, tk.END)
+    def _sh_clr(self):
+        self._sh_out.configure(state=tk.NORMAL)
+        self._sh_out.delete(1.0, tk.END)
+        self._sh_out.configure(state=tk.DISABLED)
 
-    def _clear_shell(self):
-        self.shell_out.configure(state=tk.NORMAL)
-        self.shell_out.delete(1.0, tk.END)
-        self.shell_out.configure(state=tk.DISABLED)
+    # ─── FILES ───
 
-    # File Manager
     def _fm_list(self):
         if not self._check():
             return
-        path = self.fm_path.get()
+        self._run(lambda: self.core.list_files(self._fm_path.get(), self.selected_device),
+                  self._fm_update)
 
-        def run():
-            out = self.core.list_files(path, self.selected_device)
-            self.root.after(0, lambda: self._update_fm(out))
-
-        self._run_async(run)
-
-    def _update_fm(self, output):
-        for item in self.fm_tree.get_children():
-            self.fm_tree.delete(item)
-        for line in output.splitlines():
+    def _fm_update(self, out):
+        for item in self._fm_tree.get_children():
+            self._fm_tree.delete(item)
+        for line in out.splitlines():
             parts = line.strip().split(None, 7)
-            if len(parts) >= 8 and parts[7] not in [".", ".."]:
-                self.fm_tree.insert("", tk.END, values=(
-                    parts[0], parts[2], parts[4],
-                    f"{parts[5]} {parts[6]}", parts[7]
-                ))
+            if len(parts) >= 8 and parts[7] not in (".", ".."):
+                self._fm_tree.insert("", tk.END, values=(parts[0], parts[2], parts[4],
+                                                           f"{parts[5]} {parts[6]}", parts[7]))
 
-    def _fm_dblclick(self, event):
-        sel = self.fm_tree.selection()
+    def _fm_dbl(self, event):
+        sel = self._fm_tree.selection()
         if not sel:
             return
-        item = self.fm_tree.item(sel[0])
-        name = item['values'][4]
-        current = self.fm_path.get().rstrip("/")
-        new_path = f"{current}/{name}"
-        if not name.endswith("."):
-            self.fm_path.set(new_path)
-            self._fm_list()
+        name = self._fm_tree.item(sel[0])['values'][4]
+        cur = self._fm_path.get().rstrip("/")
+        self._fm_path.set(f"{cur}/{name}")
+        self._fm_list()
 
     def _fm_up(self):
-        current = self.fm_path.get().rstrip("/")
-        parent = "/".join(current.split("/")[:-1]) or "/"
-        self.fm_path.set(parent)
+        cur = self._fm_path.get().rstrip("/")
+        self._fm_path.set("/".join(cur.split("/")[:-1]) or "/")
         self._fm_list()
 
     def _fm_push(self):
         if not self._check():
             return
-        local = filedialog.askopenfilename()
-        if local:
-            self._run_async(lambda: self.core.push(local, self.fm_path.get(), self.selected_device))
+        loc = filedialog.askopenfilename()
+        if loc:
+            self._run(lambda: self.core.push(loc, self._fm_path.get(), self.selected_device))
 
     def _fm_pull(self):
         if not self._check():
             return
-        sel = self.fm_tree.selection()
+        sel = self._fm_tree.selection()
         if sel:
-            name = self.fm_tree.item(sel[0])['values'][4]
-            remote = f"{self.fm_path.get().rstrip('/')}/{name}"
-            local = filedialog.askdirectory()
-            if local:
-                self._run_async(lambda: self.core.pull(remote, local, self.selected_device))
+            name = self._fm_tree.item(sel[0])['values'][4]
+            rem = f"{self._fm_path.get().rstrip('/')}/{name}"
+            loc = filedialog.askdirectory()
+            if loc:
+                self._run(lambda: self.core.pull(rem, loc, self.selected_device))
 
-    def _fm_delete(self):
+    def _fm_del(self):
         if not self._check():
             return
-        sel = self.fm_tree.selection()
+        sel = self._fm_tree.selection()
         if sel:
-            name = self.fm_tree.item(sel[0])['values'][4]
-            path = f"{self.fm_path.get().rstrip('/')}/{name}"
+            name = self._fm_tree.item(sel[0])['values'][4]
+            path = f"{self._fm_path.get().rstrip('/')}/{name}"
             if messagebox.askyesno("Delete", f"Delete {name}?"):
-                self._run_async(lambda: self.core.delete_file(path, self.selected_device))
+                self._run(lambda: self.core.delete_file(path, self.selected_device))
 
     def _fm_mkdir(self):
         if not self._check():
             return
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Create Directory")
-        dialog.geometry("350x120")
-        dialog.configure(bg=self.BG2)
+        name = messagebox.askstring("Mkdir", "Directory name:")
+        if name:
+            path = f"{self._fm_path.get().rstrip('/')}/{name}"
+            self._run(lambda: self.core.make_dir(path, self.selected_device))
 
-        tk.Label(dialog, text="Directory Name:", bg=self.BG2, fg=self.FG).pack(pady=(20, 5))
-        name_var = tk.StringVar()
-        tk.Entry(dialog, textvariable=name_var, font=("Consolas", 11), bg=self.BG3, fg=self.FG,
-                 relief=tk.FLAT, width=30).pack(pady=5)
-
-        def create():
-            name = name_var.get().strip()
-            if name:
-                path = f"{self.fm_path.get().rstrip('/')}/{name}"
-                self._run_async(lambda: self.core.make_dir(path, self.selected_device))
-                dialog.destroy()
-
-        tk.Button(dialog, text="Create", command=create, bg=self.GREEN, fg="#000",
-                  font=("Segoe UI", 10, "bold"), relief=tk.FLAT, padx=20, pady=5, cursor="hand2").pack(pady=10)
-
-    def _fm_search(self):
+    def _fm_find(self):
         if not self._check():
             return
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Search Files")
-        dialog.geometry("400x150")
-        dialog.configure(bg=self.BG2)
+        pat = messagebox.askstring("Find", "Pattern (e.g. *.jpg):", initialvalue="*.*")
+        if pat:
+            self._run(lambda: self.core.search_files(self._fm_path.get(), pat, self.selected_device))
 
-        tk.Label(dialog, text="Search Pattern (e.g. *.jpg):", bg=self.BG2, fg=self.FG).pack(pady=(20, 5))
-        pattern_var = tk.StringVar(value="*.*")
-        tk.Entry(dialog, textvariable=pattern_var, font=("Consolas", 11), bg=self.BG3, fg=self.FG,
-                 relief=tk.FLAT, width=30).pack(pady=5)
+    # ─── APPS ───
 
-        def search():
-            pattern = pattern_var.get().strip()
-            if pattern:
-                self._run_async(lambda: self.core.search_files(self.fm_path.get(), pattern, self.selected_device))
-                dialog.destroy()
-
-        tk.Button(dialog, text="Search", command=search, bg=self.BLUE, fg="#fff",
-                  font=("Segoe UI", 10, "bold"), relief=tk.FLAT, padx=20, pady=5, cursor="hand2").pack(pady=10)
-
-    # App Manager
-    def _app_refresh(self):
+    def _app_ref(self):
         if not self._check():
             return
-        f = self.app_filter.get()
-        s = f == "System"
-        t = f == "Third-Party"
+        f = self._app_filter.get()
+        self._run(lambda: self.core.get_packages(self.selected_device, f == "System", f == "Third-Party"),
+                  self._app_upd)
 
-        def run():
-            apps = self.core.get_packages(self.selected_device, s, t)
-            self.root.after(0, lambda: self._update_apps(apps))
+    def _app_upd(self, apps):
+        for item in self._app_tree.get_children():
+            self._app_tree.delete(item)
+        for a in apps:
+            self._app_tree.insert("", tk.END, values=(a["name"],))
 
-        self._run_async(run)
-
-    def _update_apps(self, apps):
-        for item in self.app_tree.get_children():
-            self.app_tree.delete(item)
-        for app in apps:
-            self.app_tree.insert("", tk.END, values=(app["name"],))
-
-    def _app_install(self):
-        if not self._check():
-            return
-        apk = filedialog.askopenfilename(filetypes=[("APK", "*.apk"), ("All", "*.*")])
-        if apk:
-            self._run_async(lambda: self.core.install(apk, self.selected_device))
-
-    def _app_uninstall(self):
-        if not self._check():
-            return
-        sel = self.app_tree.selection()
-        if sel:
-            pkg = self.app_tree.item(sel[0])['values'][0]
-            if messagebox.askyesno("Uninstall", f"Uninstall {pkg}?"):
-                self._run_async(lambda: self.core.uninstall(pkg, self.selected_device))
-
-    def _app_backup(self):
-        if not self._check():
-            return
-        sel = self.app_tree.selection()
-        if sel:
-            pkg = self.app_tree.item(sel[0])['values'][0]
-            folder = filedialog.askdirectory()
-            if folder:
-                self._run_async(lambda: self.core.backup_app(pkg, folder, self.selected_device))
-
-    def _app_clear(self):
-        if not self._check():
-            return
-        sel = self.app_tree.selection()
-        if sel:
-            pkg = self.app_tree.item(sel[0])['values'][0]
-            if messagebox.askyesno("Clear", f"Clear all data for {pkg}?"):
-                self._run_async(lambda: self.core.clear_app_data(pkg, self.selected_device))
-
-    def _app_force_stop(self):
-        if not self._check():
-            return
-        sel = self.app_tree.selection()
-        if sel:
-            pkg = self.app_tree.item(sel[0])['values'][0]
-            self._run_async(lambda: self.core.force_stop(pkg, self.selected_device))
-
-    def _app_disable(self):
-        if not self._check():
-            return
-        sel = self.app_tree.selection()
-        if sel:
-            pkg = self.app_tree.item(sel[0])['values'][0]
-            if messagebox.askyesno("Disable", f"Disable {pkg}?"):
-                self._run_async(lambda: self.core.disable_app(pkg, self.selected_device))
-
-    def _app_enable(self):
-        if not self._check():
-            return
-        sel = self.app_tree.selection()
-        if sel:
-            pkg = self.app_tree.item(sel[0])['values'][0]
-            self._run_async(lambda: self.core.enable_app(pkg, self.selected_device))
-
-    # Flash
-    def _browse_flash(self):
-        path = filedialog.askopenfilename(filetypes=[("Image", "*.img *.bin *.mbn"), ("All", "*.*")])
-        if path:
-            self.flash_file.set(path)
-
-    def _browse_sideload(self):
-        path = filedialog.askopenfilename(filetypes=[("ZIP", "*.zip"), ("All", "*.*")])
-        if path:
-            self.sideload_file.set(path)
-
-    def _flash_image(self):
-        if not self.selected_device:
-            messagebox.showwarning("Fastboot", "Device must be in fastboot mode!")
-            return
-        part = self.flash_part.get()
-        img = self.flash_file.get()
-        if not img or not os.path.exists(img):
-            messagebox.showerror("Error", "Select a valid image file!")
-            return
-        if not messagebox.askyesno("DANGER", f"Flash {partition} with {img}?\nThis can BRICK your device!"):
-            return
-        self._run_async(lambda: self.core.fb_flash(part, img, self.selected_device), lambda r: self._log(r, self.flash_out))
-
-    def _quick_flash(self, partition):
-        if not self.selected_device:
-            messagebox.showwarning("Fastboot", "Device must be in fastboot mode!")
-            return
-        img = filedialog.askopenfilename(title=f"Select {partition} image",
-                                          filetypes=[("Image", "*.img *.bin *.mbn"), ("All", "*.*")])
-        if img:
-            if not messagebox.askyesno("DANGER", f"Flash {partition} with {os.path.basename(img)}?"):
-                return
-            self._run_async(lambda: self.core.fb_flash(partition, img, self.selected_device),
-                            lambda r: self._log(r, self.flash_out))
-
-    def _sideload(self):
-        zf = self.sideload_file.get()
-        if not zf or not os.path.exists(zf):
-            messagebox.showerror("Error", "Select a valid ZIP file!")
-            return
-        self._run_async(lambda: self.core.sideload(zf, self.selected_device),
-                        lambda r: self._log(r, self.flash_out))
-
-    def _fb_getvar(self, var):
-        if not self.selected_device:
-            return
-        self._run_async(lambda: self.core.fb_getvar(var, self.selected_device),
-                        lambda r: self._log(r, self.flash_out))
-
-    def _fb_erase_dialog(self):
-        if not self.selected_device:
-            return
-        part = tk.simpledialog.askstring("Erase", "Partition name:") if hasattr(tk, 'simpledialog') else None
-        if not part:
-            part = messagebox.askstring("Erase Partition", "Enter partition name:")
-        if part:
-            if messagebox.askyesno("DANGER", f"Erase {part}?"):
-                self._run_async(lambda: self.core.fb_erase(part, self.selected_device),
-                                lambda r: self._log(r, self.flash_out))
-
-    def _fb_format_dialog(self):
-        if not self.selected_device:
-            return
-        part = messagebox.askstring("Format Partition", "Enter partition name:")
-        if part:
-            if messagebox.askyesno("DANGER", f"Format {part}?"):
-                self._run_async(lambda: self.core.fb_format(part, self.selected_device),
-                                lambda r: self._log(r, self.flash_out))
-
-    def _fb_boot_dialog(self):
-        if not self.selected_device:
-            return
-        img = filedialog.askopenfilename(title="Select boot image")
-        if img:
-            self._run_async(lambda: self.core.fb_boot(img, self.selected_device),
-                            lambda r: self._log(r, self.flash_out))
-
-    def _fb_update_dialog(self):
-        if not self.selected_device:
-            return
-        zf = filedialog.askopenfilename(title="Select update ZIP", filetypes=[("ZIP", "*.zip")])
-        if zf:
-            self._run_async(lambda: self.core.fb_update(zf, self.selected_device),
-                            lambda r: self._log(r, self.flash_out))
-
-    # Unlock & Root
-    def _bl_check(self):
-        if not self._check():
-            return
-        self._run_async(lambda: self.core.fb_getvar("unlocked", self.selected_device),
-                        lambda r: self._log(r, self.unlock_out))
-
-    def _bl_oem_unlock(self):
-        if not messagebox.askyesno("WARNING", "This WILL WIPE ALL DATA. Continue?"):
-            return
-        self._run_async(lambda: self.core.fb_oem_unlock(self.selected_device),
-                        lambda r: self._log(r, self.unlock_out))
-
-    def _bl_oem_lock(self):
-        if not messagebox.askyesno("WARNING", "Relocking may brick custom ROM devices. Continue?"):
-            return
-        self._run_async(lambda: self.core.fb_oem_lock(self.selected_device),
-                        lambda r: self._log(r, self.unlock_out))
-
-    def _bl_flashing_unlock(self):
-        if not messagebox.askyesno("WARNING", "This WILL WIPE ALL DATA. Continue?"):
-            return
-        self._run_async(lambda: self.core.fb_flashing_unlock(self.selected_device),
-                        lambda r: self._log(r, self.unlock_out))
-
-    def _bl_flashing_lock(self):
-        if not messagebox.askyesno("WARNING", "Relocking may brick custom ROM devices. Continue?"):
-            return
-        self._run_async(lambda: self.core.fb_flashing_lock(self.selected_device),
-                        lambda r: self._log(r, self.unlock_out))
-
-    def _root_check(self):
-        if not self._check():
-            return
-        self._run_async(lambda: self.core.shell("su -c id", self.selected_device),
-                        lambda r: self._log(r, self.unlock_out))
-
-    def _root_magisk(self):
+    def _app_inst(self):
         if not self._check():
             return
         apk = filedialog.askopenfilename(filetypes=[("APK", "*.apk")])
         if apk:
-            self._run_async(lambda: self.core.push(apk, "/sdcard/magisk.apk", self.selected_device),
-                            lambda r: self._log(r, self.unlock_out))
+            self._run(lambda: self.core.install(apk, self.selected_device))
 
-    def _root_remount(self):
+    def _app_uninst(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.remount(self.selected_device),
-                        lambda r: self._log(r, self.unlock_out))
+        sel = self._app_tree.selection()
+        if sel:
+            pkg = self._app_tree.item(sel[0])['values'][0]
+            if messagebox.askyesno("Uninstall", f"Uninstall {pkg}?"):
+                self._run(lambda: self.core.uninstall(pkg, self.selected_device))
 
-    def _root_disable_verity(self):
+    def _app_bak(self):
         if not self._check():
             return
-        if not messagebox.askyesno("WARNING", "Disable dm-verity? This reduces security."):
-            return
-        self._run_async(lambda: self.core.disable_verity(self.selected_device),
-                        lambda r: self._log(r, self.unlock_out))
+        sel = self._app_tree.selection()
+        if sel:
+            pkg = self._app_tree.item(sel[0])['values'][0]
+            f = filedialog.askdirectory()
+            if f:
+                self._run(lambda: self.core.backup_app(pkg, f, self.selected_device))
 
-    def _root_enable_verity(self):
+    def _app_clr(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.enable_verity(self.selected_device),
-                        lambda r: self._log(r, self.unlock_out))
+        sel = self._app_tree.selection()
+        if sel:
+            pkg = self._app_tree.item(sel[0])['values'][0]
+            if messagebox.askyesno("Clear", f"Clear data for {pkg}?"):
+                self._run(lambda: self.core.clear_app_data(pkg, self.selected_device))
 
-    def _set_selinux(self, mode):
+    def _app_fstop(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.set_selinux(mode, self.selected_device),
-                        lambda r: self._log(r, self.unlock_out))
+        sel = self._app_tree.selection()
+        if sel:
+            pkg = self._app_tree.item(sel[0])['values'][0]
+            self._run(lambda: self.core.force_stop(pkg, self.selected_device))
+
+    def _app_dis(self):
+        if not self._check():
+            return
+        sel = self._app_tree.selection()
+        if sel:
+            pkg = self._app_tree.item(sel[0])['values'][0]
+            if messagebox.askyesno("Disable", f"Disable {pkg}?"):
+                self._run(lambda: self.core.disable_app(pkg, self.selected_device))
+
+    def _app_en(self):
+        if not self._check():
+            return
+        sel = self._app_tree.selection()
+        if sel:
+            pkg = self._app_tree.item(sel[0])['values'][0]
+            self._run(lambda: self.core.enable_app(pkg, self.selected_device))
+
+    # ─── FLASH ───
+
+    def _browse_fl(self):
+        p = filedialog.askopenfilename(filetypes=[("Image", "*.img *.bin"), ("All", "*.*")])
+        if p:
+            self._fl_file.set(p)
+
+    def _browse_sl(self):
+        p = filedialog.askopenfilename(filetypes=[("ZIP", "*.zip")])
+        if p:
+            self._sl_file.set(p)
+
+    def _flash(self):
+        p, i = self._fl_part.get(), self._fl_file.get()
+        if not i or not os.path.exists(i):
+            messagebox.showerror("Error", "Select image file!")
+            return
+        if not messagebox.askyesno("DANGER", f"Flash {p} with {os.path.basename(i)}?\nCAN BRICK DEVICE!"):
+            return
+        self._run(lambda: self.core.fb_flash(p, i, self.selected_device),
+                  lambda r: self._log(r, self._fl_out))
+
+    def _qflash(self, part):
+        if not self.selected_device:
+            messagebox.showwarning("Fastboot", "Device must be in fastboot mode!")
+            return
+        img = filedialog.askopenfilename(title=f"Select {part} image", filetypes=[("Image", "*.img")])
+        if img and messagebox.askyesno("DANGER", f"Flash {part}?"):
+            self._run(lambda: self.core.fb_flash(part, img, self.selected_device),
+                      lambda r: self._log(r, self._fl_out))
+
+    def _sideload(self):
+        zf = self._sl_file.get()
+        if not zf or not os.path.exists(zf):
+            messagebox.showerror("Error", "Select ZIP!")
+            return
+        self._run(lambda: self.core.sideload(zf, self.selected_device),
+                  lambda r: self._log(r, self._fl_out))
+
+    def _fbv(self, var):
+        self._run(lambda: self.core.fb_getvar(var, self.selected_device),
+                  lambda r: self._log(r, self._fl_out))
+
+    def _fb_erase(self):
+        p = messagebox.askstring("Erase", "Partition name:")
+        if p and messagebox.askyesno("DANGER", f"Erase {p}?"):
+            self._run(lambda: self.core.fb_erase(p, self.selected_device),
+                      lambda r: self._log(r, self._fl_out))
+
+    def _fb_format(self):
+        p = messagebox.askstring("Format", "Partition name:")
+        if p and messagebox.askyesno("DANGER", f"Format {p}?"):
+            self._run(lambda: self.core.fb_format(p, self.selected_device),
+                      lambda r: self._log(r, self._fl_out))
+
+    def _fb_boot(self):
+        img = filedialog.askopenfilename(title="Select boot image")
+        if img:
+            self._run(lambda: self.core.fb_boot(img, self.selected_device),
+                      lambda r: self._log(r, self._fl_out))
+
+    def _fb_update(self):
+        zf = filedialog.askopenfilename(title="Select update ZIP", filetypes=[("ZIP", "*.zip")])
+        if zf:
+            self._run(lambda: self.core.fb_update(zf, self.selected_device),
+                      lambda r: self._log(r, self._fl_out))
+
+    # ─── UNLOCK & ROOT ───
+
+    def _bl_chk(self):
+        if not self._check():
+            return
+        self._run(lambda: self.core.fb_getvar("unlocked", self.selected_device),
+                  lambda r: self._log(r, self._ul_out))
+
+    def _bl_ounlock(self):
+        if not messagebox.askyesno("WARNING", "WILL WIPE ALL DATA. Continue?"):
+            return
+        self._run(lambda: self.core.fb_oem_unlock(self.selected_device),
+                  lambda r: self._log(r, self._ul_out))
+
+    def _bl_olock(self):
+        if not messagebox.askyesno("WARNING", "May brick custom ROM devices. Continue?"):
+            return
+        self._run(lambda: self.core.fb_oem_lock(self.selected_device),
+                  lambda r: self._log(r, self._ul_out))
+
+    def _bl_funlock(self):
+        if not messagebox.askyesno("WARNING", "WILL WIPE ALL DATA. Continue?"):
+            return
+        self._run(lambda: self.core.fb_flashing_unlock(self.selected_device),
+                  lambda r: self._log(r, self._ul_out))
+
+    def _bl_flock(self):
+        if not messagebox.askyesno("WARNING", "May brick custom ROM devices. Continue?"):
+            return
+        self._run(lambda: self.core.fb_flashing_lock(self.selected_device),
+                  lambda r: self._log(r, self._ul_out))
+
+    def _rt_chk(self):
+        if not self._check():
+            return
+        self._run(lambda: self.core.shell("su -c id", self.selected_device),
+                  lambda r: self._log(r, self._ul_out))
+
+    def _rt_magisk(self):
+        if not self._check():
+            return
+        apk = filedialog.askopenfilename(filetypes=[("APK", "*.apk")])
+        if apk:
+            self._run(lambda: self.core.push(apk, "/sdcard/magisk.apk", self.selected_device),
+                      lambda r: self._log(r, self._ul_out))
+
+    def _rt_remount(self):
+        if not self._check():
+            return
+        self._run(lambda: self.core.remount(self.selected_device),
+                  lambda r: self._log(r, self._ul_out))
+
+    def _rt_dverity(self):
+        if not self._check():
+            return
+        if messagebox.askyesno("WARNING", "Disable dm-verity? Reduces security."):
+            self._run(lambda: self.core.disable_verity(self.selected_device),
+                      lambda r: self._log(r, self._ul_out))
+
+    def _rt_everity(self):
+        if not self._check():
+            return
+        self._run(lambda: self.core.enable_verity(self.selected_device),
+                  lambda r: self._log(r, self._ul_out))
+
+    def _selinux(self, mode):
+        if not self._check():
+            return
+        self._run(lambda: self.core.set_selinux(mode, self.selected_device),
+                  lambda r: self._log(r, self._ul_out))
 
     def _bypass(self, method):
         if not self._check():
             return
-        if not messagebox.askyesno("Legal", "Do you OWN this device? For educational/forensic use only!"):
+        if not messagebox.askyesno("Legal", "Do you OWN this device? Educational use only!"):
             return
-        methods = {
+        funcs = {
             "swipe": lambda: self.core.bypass_swipe(self.selected_device),
             "null_pin": lambda: self.core.bypass_null_pin(self.selected_device),
-            "settings_crash": lambda: self.core.bypass_settings_crash(self.selected_device),
-            "delete_keys": lambda: self.core.bypass_delete_gesture(self.selected_device),
-            "frp": lambda: self.core.bypass_frp_deletion(self.selected_device),
+            "settings": lambda: self.core.bypass_settings(self.selected_device),
+            "delete_keys": lambda: self.core.bypass_delete_keys(self.selected_device),
+            "frp": lambda: self.core.bypass_frp(self.selected_device),
         }
-        func = methods.get(method)
-        if func:
-            self._run_async(func, lambda r: self._log(r, self.unlock_out))
+        f = funcs.get(method)
+        if f:
+            self._run(f, lambda r: self._log(r, self._ul_out))
 
-    # Diagnostics
-    def _diag_logcat(self):
+    # ─── DIAGNOSTICS ───
+
+    def _d_write(self, text):
+        self._d_out.configure(state=tk.NORMAL)
+        self._d_out.delete(1.0, tk.END)
+        self._d_out.insert(tk.END, text)
+        self._d_out.configure(state=tk.DISABLED)
+
+    def _d_logcat(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.get_logcat(self.selected_device, 500),
-                        lambda r: self._diag_write(r))
+        self._run(lambda: self.core.get_logcat(self.selected_device, 500), self._d_write)
 
-    def _diag_dmesg(self):
+    def _d_dmesg(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.get_dmesg(self.selected_device),
-                        lambda r: self._diag_write(r))
+        self._run(lambda: self.core.get_dmesg(self.selected_device), self._d_write)
 
-    def _diag_procs(self):
+    def _d_procs(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.get_processes(self.selected_device),
-                        lambda r: self._diag_write(r))
+        self._run(lambda: self.core.get_processes(self.selected_device), self._d_write)
 
-    def _diag_battery(self):
+    def _d_bat(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.get_battery_stats(self.selected_device),
-                        lambda r: self._diag_write(r))
+        self._run(lambda: self.core.get_battery(self.selected_device), self._d_write)
 
-    def _diag_memory(self):
+    def _d_mem(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.get_memory_info(self.selected_device),
-                        lambda r: self._diag_write(r))
+        self._run(lambda: self.core.get_memory(self.selected_device), self._d_write)
 
-    def _diag_cpu(self):
+    def _d_cpu(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.get_cpu_info(self.selected_device),
-                        lambda r: self._diag_write(r))
+        self._run(lambda: self.core.get_cpu(self.selected_device), self._d_write)
 
-    def _diag_thermal(self):
+    def _d_thermal(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.get_thermal_zones(self.selected_device),
-                        lambda r: self._diag_write(r))
+        self._run(lambda: self.core.get_thermal(self.selected_device), self._d_write)
 
-    def _diag_disk(self):
+    def _d_disk(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.get_disk_usage(self.selected_device),
-                        lambda r: self._diag_write(r))
+        self._run(lambda: self.core.get_disk(self.selected_device), self._d_write)
 
-    def _diag_mounts(self):
+    def _d_mounts(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.get_mount_info(self.selected_device),
-                        lambda r: self._diag_write(r))
+        self._run(lambda: self.core.get_mounts(self.selected_device), self._d_write)
 
-    def _diag_kernel(self):
+    def _d_kern(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.get_kernel_info(self.selected_device),
-                        lambda r: self._diag_write(r))
+        self._run(lambda: self.core.get_kernel(self.selected_device), self._d_write)
 
-    def _diag_partitions(self):
+    def _d_parts(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.get_partitions(self.selected_device),
-                        lambda r: self._diag_write(r))
+        self._run(lambda: self.core.get_partitions(self.selected_device), self._d_write)
 
-    def _diag_services(self):
+    def _d_svc(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.get_running_services(self.selected_device),
-                        lambda r: self._diag_write(r))
+        self._run(lambda: self.core.get_services(self.selected_device), self._d_write)
 
-    def _diag_current_app(self):
+    def _d_cur(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.get_current_app(self.selected_device),
-                        lambda r: self._diag_write(r))
+        self._run(lambda: self.core.get_current_app(self.selected_device), self._d_write)
 
-    def _diag_write(self, text):
-        self.diag_out.configure(state=tk.NORMAL)
-        self.diag_out.delete(1.0, tk.END)
-        self.diag_out.insert(tk.END, text)
-        self.diag_out.configure(state=tk.DISABLED)
+    def _d_clr(self):
+        self._d_out.configure(state=tk.NORMAL)
+        self._d_out.delete(1.0, tk.END)
+        self._d_out.configure(state=tk.DISABLED)
 
-    def _diag_clear(self):
-        self.diag_out.configure(state=tk.NORMAL)
-        self.diag_out.delete(1.0, tk.END)
-        self.diag_out.configure(state=tk.DISABLED)
+    # ─── NETWORK ───
 
-    # Network
+    def _net_write(self, text):
+        self._net_out.configure(state=tk.NORMAL)
+        self._net_out.delete(1.0, tk.END)
+        self._net_out.insert(tk.END, text)
+        self._net_out.configure(state=tk.DISABLED)
+
     def _net_connect(self):
-        ip = self.wifi_ip.get().strip()
+        ip = self._wifi_ip.get().strip()
         if not ip:
             messagebox.showerror("Error", "Enter IP address!")
             return
-        self._run_async(lambda: self.core.connect_wifi(ip, int(self.wifi_port.get()), self.selected_device),
-                        lambda r: self._net_write(r))
+        self._run(lambda: self.core.connect_wifi(ip, int(self._wifi_port.get()), self.selected_device),
+                  self._net_write)
 
-    def _net_disconnect(self):
-        self._run_async(lambda: self.core.disconnect_all(),
-                        lambda r: self._net_write(r))
+    def _net_disconn(self):
+        self._run(lambda: self.core.disconnect_all(), self._net_write)
 
-    def _net_bt_pair(self):
-        addr = self.wifi_ip.get().strip()
-        if not addr:
-            messagebox.showerror("Error", "Enter BT address!")
-            return
-        self._run_async(lambda: self.core.bt_pair(addr, self.selected_device),
-                        lambda r: self._net_write(r))
+    def _net_btp(self):
+        a = self._wifi_ip.get().strip()
+        if a:
+            self._run(lambda: self.core.bt_pair(a, self.selected_device), self._net_write)
 
-    def _net_bt_connect(self):
-        addr = self.wifi_ip.get().strip()
-        if not addr:
-            return
-        self._run_async(lambda: self.core.bt_connect(addr, self.selected_device),
-                        lambda r: self._net_write(r))
+    def _net_btc(self):
+        a = self._wifi_ip.get().strip()
+        if a:
+            self._run(lambda: self.core.bt_connect(a, self.selected_device), self._net_write)
 
-    def _net_forward(self):
+    def _net_fwd(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.forward_port(self.fwd_local.get(), self.fwd_remote.get(), self.selected_device),
-                        lambda r: self._net_write(r))
+        self._run(lambda: self.core.forward_port(self._fwd_l.get(), self._fwd_r.get(), self.selected_device),
+                  self._net_write)
 
-    def _net_list_fwd(self):
+    def _net_lfwd(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.list_forwards(self.selected_device),
-                        lambda r: self._net_write(r))
+        self._run(lambda: self.core.list_forwards(self.selected_device), self._net_write)
 
-    def _net_reverse(self):
+    def _net_rev(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.reverse_forward(self.fwd_remote.get(), self.fwd_local.get(), self.selected_device),
-                        lambda r: self._net_write(r))
+        self._run(lambda: self.core.reverse_forward(self._fwd_r.get(), self._fwd_l.get(), self.selected_device),
+                  self._net_write)
 
-    def _net_list_reverse(self):
+    def _net_lrev(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.list_reverse_forwards(self.selected_device),
-                        lambda r: self._net_write(r))
+        self._run(lambda: self.core.list_reverse(self.selected_device), self._net_write)
 
-    def _net_set_proxy(self):
+    def _net_setpx(self):
         if not self._check():
             return
-        proxy = self.proxy_addr.get().strip()
-        if proxy:
-            self._run_async(lambda: self.core.set_proxy(proxy, self.selected_device),
-                            lambda r: self._net_write(r))
+        p = self._proxy.get().strip()
+        if p:
+            self._run(lambda: self.core.set_proxy(p, self.selected_device), self._net_write)
 
-    def _net_rm_proxy(self):
+    def _net_rmpx(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.remove_proxy(self.selected_device),
-                        lambda r: self._net_write(r))
+        self._run(lambda: self.core.remove_proxy(self.selected_device), self._net_write)
 
-    def _net_write(self, text):
-        self.net_out.configure(state=tk.NORMAL)
-        self.net_out.delete(1.0, tk.END)
-        self.net_out.insert(tk.END, text)
-        self.net_out.configure(state=tk.DISABLED)
+    # ─── AUTOMATION ───
 
-    # Automation
-    def _auto_tap(self):
+    def _a_tap(self):
         if not self._check():
             return
-        x, y = int(self.tap_x.get()), int(self.tap_y.get())
-        self._run_async(lambda: self.core.tap(x, y, self.selected_device))
+        x, y = int(self._tap_x.get()), int(self._tap_y.get())
+        self._run(lambda: self.core.tap(x, y, self.selected_device))
 
-    def _auto_longpress(self):
+    def _a_lpress(self):
         if not self._check():
             return
-        x, y = int(self.tap_x.get()), int(self.tap_y.get())
-        self._run_async(lambda: self.core.long_press(x, y, 1000, self.selected_device))
+        x, y = int(self._tap_x.get()), int(self._tap_y.get())
+        self._run(lambda: self.core.long_press(x, y, 1000, self.selected_device))
 
-    def _auto_swipe(self):
+    def _a_swipe(self):
         if not self._check():
             return
-        coords = [int(v.get()) for v in self.swipe_vars]
-        self._run_async(lambda: self.core.swipe(*coords, 300, self.selected_device))
+        coords = [int(v.get()) for v in self._sw_vars]
+        self._run(lambda: self.core.swipe(*coords, 300, self.selected_device))
 
-    def _auto_text(self):
+    def _a_text(self):
         if not self._check():
             return
-        text = self.input_text_var.get()
-        if text:
-            self._run_async(lambda: self.core.input_text(text, self.selected_device))
+        t = self._in_text.get()
+        if t:
+            self._run(lambda: self.core.input_text(t, self.selected_device))
 
-    def _auto_key(self, code):
+    def _a_key(self, code):
         if not self._check():
             return
-        self._run_async(lambda: self.core.input_key(code, self.selected_device))
+        self._run(lambda: self.core.input_key(code, self.selected_device))
 
-    def _auto_monkey(self):
+    def _a_monkey(self):
         if not self._check():
             return
-        events = int(self.monkey_events.get())
-        pkg = self.monkey_pkg.get().strip() or None
-        if not messagebox.askyesno("Monkey", f"Run {events} random events?"):
+        ev = int(self._mk_ev.get())
+        pkg = self._mk_pkg.get().strip() or None
+        if not messagebox.askyesno("Monkey", f"Run {ev} random events?"):
             return
-        self._run_async(lambda: self.core.monkey_test(pkg, events, self.selected_device),
-                        lambda r: self._log(r, self.auto_out))
+        self._run(lambda: self.core.monkey(pkg, ev, self.selected_device),
+                  lambda r: self._log(r, self._a_out))
 
     # Dev options
-    def _dev_enable(self):
+    def _dv_en(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.enable_dev_options(self.selected_device))
+        self._run(lambda: self.core.enable_dev_options(self.selected_device))
 
-    def _dev_stay_awake(self):
+    def _dv_sw(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.enable_stay_awake(self.selected_device))
+        self._run(lambda: self.core.enable_stay_awake(self.selected_device))
 
-    def _dev_anim(self, scale):
+    def _dv_anim(self, s):
         if not self._check():
             return
-        self._run_async(lambda: self.core.set_animation_scale(scale, self.selected_device))
+        self._run(lambda: self.core.set_animation_scale(s, self.selected_device))
 
-    def _dev_show_touches(self):
+    def _dv_st(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.enable_show_touches(self.selected_device))
+        self._run(lambda: self.core.enable_show_touches(self.selected_device))
 
-    def _dev_pointer(self):
+    def _dv_ptr(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.enable_pointer_location(self.selected_device))
+        self._run(lambda: self.core.enable_pointer(self.selected_device))
 
-    def _dev_mock_loc(self):
+    def _dv_ml(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.enable_mock_location(self.selected_device))
+        self._run(lambda: self.core.enable_mock_location(self.selected_device))
 
-    def _dev_reset_dpi(self):
+    def _dv_rdpi(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.reset_dpi(self.selected_device))
+        self._run(lambda: self.core.reset_dpi(self.selected_device))
 
-    def _dev_reset_res(self):
+    def _dv_rres(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.reset_resolution(self.selected_device))
+        self._run(lambda: self.core.reset_resolution(self.selected_device))
 
-    def _dev_open_url(self):
+    def _dv_url(self):
         if not self._check():
             return
-        url = messagebox.askstring("Open URL", "Enter URL:")
-        if url:
-            self._run_async(lambda: self.core.open_url(url, self.selected_device))
+        u = messagebox.askstring("Open URL", "URL:")
+        if u:
+            self._run(lambda: self.core.open_url(u, self.selected_device))
 
-    # Advanced
-    def _adv_load_props(self):
+    # ─── ADVANCED ───
+
+    def _ad_write(self, text):
+        self._ad_out.configure(state=tk.NORMAL)
+        self._ad_out.delete(1.0, tk.END)
+        self._ad_out.insert(tk.END, text)
+        self._ad_out.configure(state=tk.DISABLED)
+
+    def _ad_load(self):
         if not self._check():
             return
         def run():
             props = self.core.get_device_props(self.selected_device)
-            text = "\n".join(f"{k}={v}" for k, v in sorted(props.items()))
-            self.root.after(0, lambda: self._adv_write(text))
-        self._run_async(run)
+            return "\n".join(f"{k}={v}" for k, v in sorted(props.items()))
+        self._run(run, self._ad_write)
 
-    def _adv_save_props(self):
-        text = self.adv_out.get(1.0, tk.END)
-        path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text", "*.txt")])
-        if path:
-            with open(path, 'w') as f:
+    def _ad_save(self):
+        text = self._ad_out.get(1.0, tk.END)
+        p = filedialog.asksaveasfilename(defaultextension=".txt")
+        if p:
+            with open(p, 'w') as f:
                 f.write(text)
-            self._log(f"Saved to {path}", self.adv_out)
+            self._status("Saved")
 
-    def _adv_set_prop(self):
+    def _ad_set_p(self):
         if not self._check():
             return
-        key = self.prop_key.get().strip()
-        val = self.prop_val.get().strip()
-        if key:
-            self._run_async(lambda: self.core.set_prop(key, val, self.selected_device),
-                            lambda r: self._adv_write(r))
+        k, v = self._ad_key.get().strip(), self._ad_val.get().strip()
+        if k:
+            self._run(lambda: self.core.set_prop(k, v, self.selected_device), self._ad_write)
 
-    def _adv_settings(self, ns):
+    def _ad_sett(self, ns):
         if not self._check():
             return
-        self._run_async(lambda: self.core.shell(f"settings list {ns}", self.selected_device, timeout=15),
-                        lambda r: self._adv_write(r))
+        self._run(lambda: self.core.settings_list(ns, self.selected_device), self._ad_write)
 
-    def _adv_dump_ui(self):
+    def _ad_dui(self):
         if not self._check():
             return
-        folder = filedialog.askdirectory()
-        if folder:
-            path = os.path.join(folder, "ui_dump.xml")
-            self._run_async(lambda: self.core.dump_ui(path, self.selected_device),
-                            lambda r: self._adv_write(r))
+        f = filedialog.askdirectory()
+        if f:
+            self._run(lambda: self.core.dump_ui(os.path.join(f, "ui_dump.xml"), self.selected_device),
+                      self._ad_write)
 
-    def _adv_contacts(self):
+    def _ad_contacts(self):
         if not self._check():
             return
-        folder = filedialog.askdirectory()
-        if folder:
-            path = os.path.join(folder, "contacts.db")
-            self._run_async(lambda: self.core.pull("/data/data/com.android.providers.contacts/databases/contacts2.db", path, self.selected_device),
-                            lambda r: self._adv_write(r))
+        f = filedialog.askdirectory()
+        if f:
+            self._run(lambda: self.core.pull("/data/data/com.android.providers.contacts/databases/contacts2.db",
+                                              os.path.join(f, "contacts.db"), self.selected_device),
+                      self._ad_write)
 
-    def _adv_sms(self):
+    def _ad_sms(self):
         if not self._check():
             return
-        folder = filedialog.askdirectory()
-        if folder:
-            path = os.path.join(folder, "sms.db")
-            self._run_async(lambda: self.core.pull("/data/data/com.android.providers.telephony/databases/mmssms.db", path, self.selected_device),
-                            lambda r: self._adv_write(r))
+        f = filedialog.askdirectory()
+        if f:
+            self._run(lambda: self.core.pull("/data/data/com.android.providers.telephony/databases/mmssms.db",
+                                              os.path.join(f, "sms.db"), self.selected_device),
+                      self._ad_write)
 
-    def _adv_wifi_cfg(self):
+    def _ad_wifi(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.root_shell("cat /data/misc/wifi/wpa_supplicant.conf", self.selected_device),
-                        lambda r: self._adv_write(r))
+        self._run(lambda: self.core.root_shell("cat /data/misc/wifi/wpa_supplicant.conf", self.selected_device),
+                  self._ad_write)
 
-    def _adv_users(self):
+    def _ad_users(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.list_users(self.selected_device),
-                        lambda r: self._adv_write(r))
+        self._run(lambda: self.core.list_users(self.selected_device), self._ad_write)
 
-    def _adv_accounts(self):
+    def _ad_accts(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.list_accounts(self.selected_device),
-                        lambda r: self._adv_write(r))
+        self._run(lambda: self.core.list_accounts(self.selected_device), self._ad_write)
 
-    def _adv_open_url(self):
+    def _ad_url(self):
         if not self._check():
             return
-        url = messagebox.askstring("Open URL", "Enter URL:")
-        if url:
-            self._run_async(lambda: self.core.open_url(url, self.selected_device))
+        u = messagebox.askstring("Open URL", "URL:")
+        if u:
+            self._run(lambda: self.core.open_url(u, self.selected_device))
 
-    def _adv_factory_reset(self):
+    def _ad_freset(self):
         if not self._check():
             return
-        if not messagebox.askyesno("DANGER", "FACTORY RESET - ALL DATA WILL BE LOST!\nAre you ABSOLUTELY sure?"):
+        if not messagebox.askyesno("DANGER", "FACTORY RESET! ALL DATA GONE!\nABSOLUTELY sure?"):
             return
-        if not messagebox.askyesno("FINAL WARNING", "This cannot be undone. Proceed?"):
+        if not messagebox.askyesno("FINAL", "Cannot undo. Proceed?"):
             return
-        self._run_async(lambda: self.core.wipe_data(self.selected_device),
-                        lambda r: self._adv_write(r))
+        self._run(lambda: self.core.wipe_data(self.selected_device), self._ad_write)
 
-    def _adv_wipe_cache(self):
+    def _ad_wcache(self):
         if not self._check():
             return
-        if not messagebox.askyesno("Warning", "Wipe cache partition?"):
-            return
-        self._run_async(lambda: self.core.wipe_cache(self.selected_device),
-                        lambda r: self._adv_write(r))
+        if messagebox.askyesno("Warning", "Wipe cache?"):
+            self._run(lambda: self.core.wipe_cache(self.selected_device), self._ad_write)
 
-    def _adv_partition_list(self):
+    def _ad_parts(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.get_partition_list(self.selected_device),
-                        lambda r: self._adv_write(r))
+        self._run(lambda: self.core.get_partition_list(self.selected_device), self._ad_write)
 
-    def _adv_partition_info(self):
+    def _ad_pinfo(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.get_partitions(self.selected_device),
-                        lambda r: self._adv_write(r))
+        self._run(lambda: self.core.get_partitions(self.selected_device), self._ad_write)
 
-    def _adv_media_scan(self):
+    def _ad_mscan(self):
         if not self._check():
             return
-        path = messagebox.askstring("Media Scan", "Path to scan (e.g. /sdcard/DCIM):")
-        if path:
-            self._run_async(lambda: self.core.media_scan(path, self.selected_device),
-                            lambda r: self._adv_write(r))
+        p = messagebox.askstring("Media Scan", "Path (e.g. /sdcard/DCIM):")
+        if p:
+            self._run(lambda: self.core.media_scan(p, self.selected_device), self._ad_write)
 
-    def _adv_flash_package(self):
+    def _ad_flashpkg(self):
         if not self.selected_device:
-            messagebox.showwarning("Fastboot", "Device must be in fastboot mode!")
+            messagebox.showwarning("Fastboot", "Need fastboot mode!")
             return
-        folder = filedialog.askdirectory(title="Select ROM package folder")
-        if not folder:
+        f = filedialog.askdirectory(title="Select ROM folder")
+        if not f:
             return
-        # Find .img files
         imgs = {}
-        for f in os.listdir(folder):
-            if f.endswith(".img"):
-                part = os.path.splitext(f)[0]
-                imgs[part] = os.path.join(folder, f)
+        for fn in os.listdir(f):
+            if fn.endswith(".img"):
+                imgs[os.path.splitext(fn)[0]] = os.path.join(f, fn)
         if not imgs:
-            messagebox.showinfo("Info", "No .img files found in selected folder")
+            messagebox.showinfo("Info", "No .img files found")
             return
-        summary = "\n".join(f"  {k}: {os.path.basename(v)}" for k, v in imgs.items())
-        if not messagebox.askyesno("DANGER", f"Flash these partitions?\n\n{summary}\n\nTHIS CAN BRICK YOUR DEVICE!"):
+        s = "\n".join(f"  {k}: {os.path.basename(v)}" for k, v in list(imgs.items())[:15])
+        if not messagebox.askyesno("DANGER", f"Flash these?\n\n{s}\n\nCAN BRICK!"):
             return
-        def flash_all():
-            results = []
+        def flash():
+            res = []
             for part, img in imgs.items():
-                result = self.core.fb_flash(part, img, self.selected_device)
-                results.append(f"{part}: {result}")
-            return "\n".join(results)
-        self._run_async(flash_all, lambda r: self._adv_write(r))
+                res.append(f"{part}: {self.core.fb_flash(part, img, self.selected_device)}")
+            return "\n".join(res)
+        self._run(flash, self._ad_write)
 
-    def _adv_flash_skip_reboot(self):
-        self._adv_flash_package()
+    def _ad_flashskip(self):
+        self._ad_flashpkg()
 
-    def _adv_write(self, text):
-        self.adv_out.configure(state=tk.NORMAL)
-        self.adv_out.delete(1.0, tk.END)
-        self.adv_out.insert(tk.END, text)
-        self.adv_out.configure(state=tk.DISABLED)
+    # ─── QUICK ACTIONS ───
 
-    # Dashboard quick actions
-    def _screenshot(self):
+    def _scr(self):
         if not self._check():
             return
-        folder = filedialog.askdirectory()
-        if folder:
-            path = os.path.join(folder, f"screenshot_{int(time.time())}.png")
-            self._run_async(lambda: self.core.screenshot(path, self.selected_device))
+        f = filedialog.askdirectory()
+        if f:
+            self._run(lambda: self.core.screenshot(os.path.join(f, f"sc_{int(time.time())}.png"), self.selected_device))
 
-    def _screen_record(self):
+    def _rec(self):
         if not self._check():
             return
-        folder = filedialog.askdirectory()
-        if folder:
-            path = os.path.join(folder, f"screenrecord_{int(time.time())}.mp4")
-            self._run_async(lambda: self.core.screenrecord(path, 10, self.selected_device))
+        f = filedialog.askdirectory()
+        if f:
+            self._run(lambda: self.core.screenrecord(os.path.join(f, f"sr_{int(time.time())}.mp4"), 10, self.selected_device))
 
-    def _dump_ui_action(self):
+    def _dump_ui_act(self):
         if not self._check():
             return
-        folder = filedialog.askdirectory()
-        if folder:
-            path = os.path.join(folder, "ui_dump.xml")
-            self._run_async(lambda: self.core.dump_ui(path, self.selected_device))
+        f = filedialog.askdirectory()
+        if f:
+            self._run(lambda: self.core.dump_ui(os.path.join(f, "ui_dump.xml"), self.selected_device))
 
-    def _clear_cache(self):
+    def _clrcache(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.shell("pm trim-caches 1G", self.selected_device))
+        self._run(lambda: self.core.shell("pm trim-caches 1G", self.selected_device))
 
-    def _emergency_info(self):
+    def _emergency(self):
         if not self._check():
             return
         def run():
-            info = []
-            info.append("=== EMERGENCY DEVICE INFO ===")
-            info.append(self.core.shell("getprop ro.product.model", self.selected_device))
-            info.append(self.core.shell("getprop ro.build.fingerprint", self.selected_device))
-            info.append(self.core.shell("getprop gsm.version.baseband", self.selected_device))
-            info.append(self.core.shell("dumpsys telephony.registry", self.selected_device))
-            return "\n".join(info)
-        self._run_async(run)
+            return "\n".join([
+                "=== EMERGENCY ===",
+                self.core.shell("getprop ro.product.model", self.selected_device),
+                self.core.shell("getprop ro.build.fingerprint", self.selected_device),
+                self.core.shell("getprop gsm.version.baseband", self.selected_device),
+            ])
+        self._run(run)
 
-    def _wake_screen(self):
+    def _wake(self):
         if not self._check():
             return
-        self._run_async(lambda: self.core.wake_screen(self.selected_device))
+        self._run(lambda: self.core.wake_screen(self.selected_device))
 
 
 def main():
@@ -1927,6 +1788,8 @@ def main():
     except:
         pass
     app = ADBExpertGUI(root)
+    # Start auto-refresh after first full refresh
+    root.after(8000, app._auto_refresh)
     root.mainloop()
 
 
